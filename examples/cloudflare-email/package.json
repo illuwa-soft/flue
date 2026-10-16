@@ -1,0 +1,29 @@
+{
+	"name": "cloudflare-email-example",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"deploy": "vite build && wrangler deploy",
+		"cf-typegen": "wrangler types",
+		"check:types": "tsc --noEmit",
+		"test": "node --test test/email.test.mjs",
+		"test:workerd": "node --test test/worker.test.mjs",
+		"test:blueprint": "node --test test/blueprint.test.mjs"
+	},
+	"dependencies": {
+		"@flue/runtime": "workspace:*",
+		"hono": "^4.12.32",
+		"postal-mime": "^2.6.0",
+		"valibot": "^1.1.0"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.39.2",
+		"@flue/vite": "workspace:*",
+		"@types/node": "^26.1.1",
+		"typescript": "^7.0.2",
+		"vite": "^8.1.2",
+		"wrangler": "^4.113.0"
+	}
+}

@@ -35,6 +35,13 @@ const openTelemetryIcon = svgDataUri(
 
 export const channels: EcosystemItem[] = [
 	{
+		name: 'Cloudflare Email',
+		href: '/docs/ecosystem/channels/cloudflare-email/',
+		icon: 'https://svgl.app/library/cloudflare.svg',
+		background: '#ffffff',
+		keywords: 'email routing sending workers native',
+	},
+	{
 		name: 'Discord',
 		href: '/docs/ecosystem/channels/discord/',
 		icon: 'https://svgl.app/library/discord.svg',

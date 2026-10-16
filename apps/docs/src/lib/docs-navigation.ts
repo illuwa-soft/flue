@@ -152,6 +152,7 @@ export const docsSections: DocsSection[] = [
 			{
 				title: 'Channels',
 				items: [
+					{ title: 'Cloudflare Email', slug: 'ecosystem/channels/cloudflare-email' },
 					{ title: 'Discord', slug: 'ecosystem/channels/discord' },
 					{ title: 'Facebook', slug: 'ecosystem/channels/messenger' },
 					{ title: 'GitHub', slug: 'ecosystem/channels/github' },

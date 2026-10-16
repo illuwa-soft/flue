@@ -1,0 +1,16 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "flue-cloudflare-email",
+	"compatibility_date": "2026-08-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"ai": { "binding": "AI" },
+	"r2_buckets": [{ "binding": "INBOX", "bucket_name": "flue-cloudflare-email-inbox" }],
+	"send_email": [{ "name": "EMAIL" }],
+	"vars": {
+		"EMAIL_RECIPIENT": "support@example.com",
+		"EMAIL_REPLY_ALLOWED_SENDERS": ""
+	},
+	"secrets": { "required": ["ADMIN_TOKEN"] },
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["FlueEmailAssistantAgent"] }],
+	"observability": { "enabled": true }
+}
