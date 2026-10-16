@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { receiveEmail, replyToEmail, retrieveEmail } from '../src/channels/email.ts';
-import { handleHumanReply, proposeApproval, readHitlState } from '../src/hitl.ts';
+import { importLegacyThread, readThreadHistory } from '../src/history.ts';
+import { handleHumanReply, parseDecision, proposeApproval, readHitlState } from '../src/hitl.ts';
 
 /** Keep R2 conditional writes observable without contacting Cloudflare. / R2 조건부 쓰기를 오프라인에서 검증합니다. */
 class MemoryBucket {
@@ -89,7 +90,13 @@ test('store before admission; stable replay; scoped retrieval; one reply with th
 });
 
 /** Make human replies without silently inheriting a session from the subject. / 제목으로 세션을 추측하지 않는 사람의 답장을 만듭니다. */
-function humanMail(id, body, parent = '', author = 'sender@example.net') {
+function humanMail(
+	id,
+	body,
+	parent = '',
+	author = 'sender@example.net',
+	contentType = 'text/plain',
+) {
 	const headers = new Headers({ subject: 'Task', 'message-id': `<${id}@example.net>` });
 	if (parent) headers.set('in-reply-to', parent);
 	const raw = [
@@ -98,7 +105,7 @@ function humanMail(id, body, parent = '', author = 'sender@example.net') {
 		'Subject: Task',
 		`Message-ID: <${id}@example.net>`,
 		`In-Reply-To: ${parent}`,
-		'Content-Type: text/plain; charset=utf-8',
+		`Content-Type: ${contentType}; charset=utf-8`,
 		'',
 		body,
 	].join('\r\n');
@@ -438,5 +445,171 @@ test('an interrupted approved artifact write resumes from stored arguments on th
 	assert.equal(
 		(await (await bucket.get(complete.artifactKey)).json()).content,
 		'Exact approved contents',
+	);
+});
+
+test('HTML-only mail becomes readable text and quoted HTML never grants approval', async () => {
+	const env = {
+		INBOX: new MemoryBucket(),
+		EMAIL_RECIPIENT: 'support@example.com',
+		EMAIL_REPLY_ALLOWED_SENDERS: 'sender@example.net',
+		EMAIL: {
+			async send() {
+				return { messageId: `<${crypto.randomUUID()}@example.com>` };
+			},
+		},
+	};
+	const admit = async () => ({ submissionId: 'html-sub' });
+	const root = await receiveEmail(
+		humanMail(
+			'html-root',
+			'<p>이름은 푸른달입니다.&nbsp;기억해 주세요.</p><script>bad()</script>',
+			'',
+			'sender@example.net',
+			'text/html',
+		),
+		env,
+		admit,
+	);
+	assert.match((await retrieveEmail(env, root.emailId)).text, /^이름은 푸른달입니다\./);
+	assert.doesNotMatch((await retrieveEmail(env, root.emailId)).text, /<p>|bad\(\)/);
+	await handleHumanReply(env, root.threadId, 'sender@example.net', root.emailId);
+	await proposeApproval(
+		env,
+		root.threadId,
+		'sender@example.net',
+		root.emailId,
+		{ title: 'HTML', content: 'Approved only' },
+		'html-tool',
+	);
+	const waiting = await readHitlState(env, root.threadId);
+	const quote = await receiveEmail(
+		humanMail(
+			'html-quote',
+			`<blockquote><p>승인 ${waiting.pending.token}</p></blockquote>`,
+			'<html-root@example.net>',
+			'sender@example.net',
+			'text/html',
+		),
+		env,
+		admit,
+	);
+	const quotedText = (await retrieveEmail(env, quote.emailId)).text;
+	assert.match(quotedText, /^>/);
+	assert.equal(parseDecision(quotedText), undefined);
+	await handleHumanReply(env, root.threadId, 'sender@example.net', quote.emailId);
+	assert.equal((await readHitlState(env, root.threadId)).phase, 'waiting');
+	const approval = await receiveEmail(
+		humanMail(
+			'html-approve',
+			`<p>승인&nbsp;${waiting.pending.token}</p><blockquote>old text</blockquote>`,
+			'<html-root@example.net>',
+			'sender@example.net',
+			'text/html',
+		),
+		env,
+		admit,
+	);
+	await handleHumanReply(env, root.threadId, 'sender@example.net', approval.emailId);
+	assert.equal((await readHitlState(env, root.threadId)).phase, 'completed');
+});
+
+test('ordinary conversation during pending approval is left to the model without consuming its reply', async () => {
+	const env = {
+		INBOX: new MemoryBucket(),
+		EMAIL_RECIPIENT: 'support@example.com',
+		EMAIL_REPLY_ALLOWED_SENDERS: 'sender@example.net',
+		EMAIL: {
+			async send() {
+				return { messageId: `<${crypto.randomUUID()}@example.com>` };
+			},
+		},
+	};
+	const admit = async () => ({ submissionId: 'chat-sub' });
+	const root = await receiveEmail(humanMail('chat-root', 'Document for review.'), env, admit);
+	await handleHumanReply(env, root.threadId, 'sender@example.net', root.emailId);
+	await proposeApproval(
+		env,
+		root.threadId,
+		'sender@example.net',
+		root.emailId,
+		{ title: 'Pending', content: 'Unchanged' },
+		'chat-tool',
+	);
+	const question = await receiveEmail(
+		humanMail('chat-question', '앞에서 알려준 내 이름이 무엇인가요?', '<chat-root@example.net>'),
+		env,
+		admit,
+	);
+	await handleHumanReply(env, root.threadId, 'sender@example.net', question.emailId);
+	assert.equal((await readHitlState(env, root.threadId)).phase, 'waiting');
+	assert.equal(await env.INBOX.get(`replies/${question.emailId}.json`), null);
+});
+
+test('explicit legacy import preserves bytes, validates reference connectivity and supplies prior human context', async () => {
+	let sent = 0;
+	const env = {
+		INBOX: new MemoryBucket(),
+		EMAIL_RECIPIENT: 'support@example.com',
+		EMAIL_REPLY_ALLOWED_SENDERS: 'sender@example.net',
+		EMAIL: {
+			async send() {
+				return { messageId: `<legacy-out-${++sent}@example.com>` };
+			},
+		},
+	};
+	const admit = async () => ({ submissionId: 'legacy-sub' });
+	const root = await receiveEmail(
+		humanMail(
+			'legacy-root',
+			'<p>내 이름은 푸른달입니다.</p>',
+			'',
+			'sender@example.net',
+			'text/html',
+		),
+		env,
+		admit,
+	);
+	await replyToEmail(env, root.emailId, 'Acknowledged.');
+	const second = await receiveEmail(
+		humanMail(
+			'legacy-second',
+			'<p>이름을 기억해 주세요.</p>',
+			'<legacy-out-1@example.com>',
+			'sender@example.net',
+			'text/html',
+		),
+		env,
+		admit,
+	);
+	await replyToEmail(env, second.emailId, 'Acknowledged again.');
+	for (const key of [...env.INBOX.objects.keys()]) {
+		if (key.startsWith('message-index/')) env.INBOX.objects.delete(key);
+		if (key.startsWith('inbound/')) {
+			delete env.INBOX.objects.get(key).customMetadata.threadId;
+			delete env.INBOX.objects.get(key).customMetadata.owner;
+		}
+	}
+	const rawBefore = await (await env.INBOX.get(`inbound/${root.emailId}.eml`)).arrayBuffer();
+	await importLegacyThread(env, root.emailId, [second.emailId, root.emailId]);
+	const rawAfter = await (await env.INBOX.get(`inbound/${root.emailId}.eml`)).arrayBuffer();
+	assert.deepEqual(Buffer.from(rawAfter), Buffer.from(rawBefore));
+	const history = await readThreadHistory(env, root.threadId, 'sender@example.net');
+	assert.equal(history.length, 2);
+	assert.ok(history.some((mail) => mail.text.includes('푸른달')));
+	const next = await receiveEmail(
+		humanMail('legacy-next', '내 이름이 뭐죠?', '<legacy-out-2@example.com>'),
+		env,
+		admit,
+	);
+	assert.equal(next.threadId, root.threadId);
+	await assert.rejects(
+		() => readThreadHistory(env, root.threadId, 'intruder@example.net'),
+		/owner/,
+	);
+	const unrelated = await receiveEmail(humanMail('legacy-unrelated', 'Independent.'), env, admit);
+	await assert.rejects(
+		() => importLegacyThread(env, root.emailId, [root.emailId, unrelated.emailId]),
+		/connected|legacy/,
 	);
 });

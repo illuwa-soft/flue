@@ -55,11 +55,12 @@ test(
 				{ env },
 			);
 			assert.equal(add.stdout, update.stdout);
-			assert.ok(add.stdout.includes('flue-blueprint: channel/cloudflare-email@2'));
+			assert.ok(add.stdout.includes('flue-blueprint: channel/cloudflare-email@3'));
 			const blocks = [...guide.matchAll(/```ts\n([\s\S]*?)\n```/g)].map((match) => match[1]);
-			assert.equal(blocks.length, 5);
+			assert.equal(blocks.length, 6);
 			const destinations = [
 				'src/channels/email.ts',
+				'src/history.ts',
 				'src/hitl.ts',
 				'src/local-model.ts',
 				'src/agents/email-assistant.ts',
@@ -108,7 +109,7 @@ test(
 			await execute(process.execPath, ['--test', 'test/email.test.mjs'], options);
 			await execute('pnpm', ['exec', 'vite', 'build'], options);
 			const upgrade = path.join(consumer, 'upgrade');
-			const baseline = 'a08b84e50d3474bb32383f33cd04a35e3034064a';
+			const baseline = '0d358e7492cdc7aed79b57a3e751d6c96ef4cfac';
 			for (const destination of [...destinations, 'wrangler.jsonc']) {
 				const result = await execute(
 					'git',
@@ -129,11 +130,11 @@ test(
 			);
 			await writeFile(
 				path.join(upgrade, 'package.json'),
-				`${JSON.stringify({ dependencies: JSON.parse(oldPackage.stdout).dependencies }, null, 2)}\n`,
+				`${JSON.stringify({ dependencies: JSON.parse(oldPackage.stdout).dependencies, devDependencies: JSON.parse(oldPackage.stdout).devDependencies }, null, 2)}\n`,
 			);
 			const upgradeDiff = [...guide.matchAll(/```diff\n([\s\S]*?)\n```/g)].at(-1)?.[1];
 			assert.ok(upgradeDiff);
-			const diffFile = path.join(consumer, 'v2.patch');
+			const diffFile = path.join(consumer, 'v3.patch');
 			await writeFile(diffFile, `${upgradeDiff}\n`);
 			const directory = `--directory=${path.relative(root, upgrade)}`;
 			await execute('git', ['apply', '--check', directory, diffFile], { cwd: root });

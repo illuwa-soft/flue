@@ -23,14 +23,36 @@ export function installLocalModel() {
 		const result = JSON.parse(payload) as {
 			email: { text: string };
 			hitl: { phase: string; feedback: string };
+			replySent: boolean;
+			priorEmails: { text: string }[];
 		};
-		if (result.hitl.phase !== 'drafting')
-			return fauxAssistantMessage(fauxText(`HITL: ${result.hitl.phase}`));
+		if (result.replySent) return fauxAssistantMessage(fauxText(`HITL: ${result.hitl.phase}`));
+		if (
+			result.hitl.phase === 'drafting' &&
+			(result.hitl.feedback || /문서|document|draft|approval|저장/i.test(result.email.text))
+		) {
+			return fauxAssistantMessage(
+				fauxToolCall('request_email_approval', {
+					title: '로컬 검증 문서',
+					content: (result.hitl.feedback || result.email.text).slice(0, 12_000),
+				}),
+				{ stopReason: 'toolUse' },
+			);
+		}
+		const previous = context.messages.flatMap((message) => {
+			if (message.role !== 'toolResult' || message.toolName !== 'retrieve_cloudflare_email')
+				return [];
+			const text = message.content
+				.filter((part) => part.type === 'text')
+				.map((part) => part.text)
+				.join('');
+			return [(JSON.parse(text) as { email: { text: string } }).email.text];
+		});
+		const text = [...result.priorEmails.map((mail) => mail.text), ...previous]
+			.join('\n')
+			.slice(-4000);
 		return fauxAssistantMessage(
-			fauxToolCall('request_email_approval', {
-				title: '로컬 검증 문서',
-				content: (result.hitl.feedback || result.email.text).slice(0, 12_000),
-			}),
+			fauxToolCall('reply_to_cloudflare_email', { text: `로컬 대화 기록:\n${text}` }),
 			{ stopReason: 'toolUse' },
 		);
 	};

@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { EmailAssistant } from './agents/email-assistant.ts';
 import { retrieveEmail } from './channels/email.ts';
+import { importLegacyThread } from './history.ts';
 import { readHitlState } from './hitl.ts';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -19,13 +20,19 @@ app.use('*', async (c, next) => {
 });
 app.route('/agents/email', createAgentRouter(EmailAssistant));
 
+/** Import only an explicitly selected connected v1 thread behind administrator authentication. / 관리자 인증 뒤에서 명시적으로 선택한 연결된 v1 스레드만 가져옵니다. */
+app.post('/api/admin/legacy-thread', async (c) => {
+	const input = await c.req.json<{ rootEmailId: string; emailIds: string[] }>();
+	return c.json(await importLegacyThread(env, input.rootEmailId, input.emailIds));
+});
+
 /** Inspect simulated mail only in explicitly selected local mode. / 명시적인 로컬 모드에서만 가상 발신 메일을 조회합니다. */
 app.get('/api/local/outbox', async (c) => {
 	if (String(env.EMAIL_MODE) !== 'local') return c.body(null, 404);
 	const listed = await env.INBOX.list({
 		prefix: 'outbox/',
 		limit: 100,
-		cursor: c.req.query('cursor'),
+		cursor: c.req.query('cursor') || undefined,
 	});
 	const messages = await Promise.all(
 		listed.objects.map(async ({ key }) => ({
@@ -60,7 +67,7 @@ app.get('/api/emails', async (c) => {
 	const listed = await env.INBOX.list({
 		prefix: 'receipts/',
 		limit: 20,
-		cursor: c.req.query('cursor'),
+		cursor: c.req.query('cursor') || undefined,
 	});
 	let cursor: string | undefined;
 	if (listed.truncated) cursor = listed.cursor;

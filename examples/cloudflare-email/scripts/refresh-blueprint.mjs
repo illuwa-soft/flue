@@ -4,16 +4,17 @@ import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 const example = path.join(root, 'examples/cloudflare-email');
-const baseline = 'a08b84e50d3474bb32383f33cd04a35e3034064a';
+const baseline = '0d358e7492cdc7aed79b57a3e751d6c96ef4cfac';
 const files = [
 	'src/channels/email.ts',
+	'src/history.ts',
 	'src/hitl.ts',
 	'src/local-model.ts',
 	'src/agents/email-assistant.ts',
 	'src/cloudflare.ts',
 ];
 
-/** Read the frozen v1 contract rather than reconstructing upgrade history. / 업그레이드 이력을 재구성하지 않고 고정된 v1 계약을 읽습니다. */
+/** Read the frozen previous contract rather than reconstructing upgrade history. / 업그레이드 이력을 재구성하지 않고 고정된 이전 계약을 읽습니다. */
 function previous(file) {
 	try {
 		return execFileSync('git', ['show', `${baseline}:examples/cloudflare-email/${file}`], {
@@ -57,8 +58,16 @@ const newPackage = JSON.parse(await readFile(path.join(example, 'package.json'),
 changes.push(
 	diff(
 		'package.json',
-		JSON.stringify({ dependencies: oldPackage.dependencies }, null, 2),
-		JSON.stringify({ dependencies: newPackage.dependencies }, null, 2),
+		JSON.stringify(
+			{ dependencies: oldPackage.dependencies, devDependencies: oldPackage.devDependencies },
+			null,
+			2,
+		),
+		JSON.stringify(
+			{ dependencies: newPackage.dependencies, devDependencies: newPackage.devDependencies },
+			null,
+			2,
+		),
 	),
 );
 changes.push(
@@ -69,8 +78,15 @@ changes.push(
 	),
 );
 
+const previousGuide = execFileSync(
+	'git',
+	['show', `${baseline}:blueprints/channel--cloudflare-email.md`],
+	{ cwd: root, encoding: 'utf8' },
+).split('\n## Upgrade Guide\n')[1];
+if (!previousGuide) throw new Error('Previous upgrade history is missing.');
+
 const introduction = `---
-{ "kind": "channel", "version": 2, "website": "https://developers.cloudflare.com/email-service/" }
+{ "kind": "channel", "version": 3, "website": "https://developers.cloudflare.com/email-service/" }
 ---
 
 # Cloudflare Email Service and threaded HITL
@@ -82,8 +98,10 @@ example. One known email thread maps to one Flue conversation. Each incoming
 mail retains its own immutable source, retrieval target and idempotency key.
 There is no HTTP webhook, new runtime approval API, or provider-agnostic client.
 
-This example proposes exact document contents, ends the response while waiting,
-and writes an R2 document artifact only after a later valid human email. Adapt
+Ordinary email questions get conversational replies with thread history. Only
+requested document artifacts use the approval gate. The example proposes exact
+contents, ends the response while waiting, and writes an R2 document artifact
+only after a later valid human email. Adapt
 the artifact operation to a real domain action only with the user's approval
 and an idempotent external execution contract.
 
@@ -94,8 +112,9 @@ src/, or the root. Confirm the Cloudflare target and inspect agents, app.ts,
 cloudflare.ts, Wrangler resources, migrations, environment and sender policies.
 Preserve existing Worker handlers and application customizations.
 
-Install direct dependencies postal-mime@^2.6.0, valibot and
-@earendil-works/pi-ai@^1.1.0 when missing. The latter provides the same faux
+Install direct dependencies postal-mime@^2.6.0, html-to-text@^9.0.5, valibot and
+@earendil-works/pi-ai@^1.1.0 when missing; add @types/html-to-text@^9 as a dev
+dependency. Pi provides the same faux
 provider mechanism already used by Flue's offline examples. Keep the installed
 Flue/Vite toolchain. Add EMAIL_MODE: "live" to Wrangler vars, plus INBOX (R2),
 EMAIL (send_email), EMAIL_RECIPIENT and EMAIL_REPLY_ALLOWED_SENDERS. An empty
@@ -122,6 +141,10 @@ compatibility date supported by the installed workerd. Append a new SQLite
 migration only if adding a new agent identity; never rewrite deployed history.
 
 ## Approval protocol and security
+
+HTML-only bodies are parsed into readable text, with blockquotes kept quoted.
+Ordinary conversation is allowed while an approval is waiting and cannot
+change that pending plan. A plain answer does not require a document approval.
 
 The first new, unquoted plain-text line must contain one exact command:
 
@@ -179,6 +202,14 @@ data changes from emailId to threadId/owner: old v1 per-mail conversations are
 not resumed as v2 tasks. New ingress uses the cloudflare-thread: prefix; do not
 replay old mail or migrate an uncertain operation into an approved state.
 
+For an explicitly selected old v1 thread, the runnable example provides an
+administrator-only POST /api/admin/legacy-thread with rootEmailId and emailIds.
+It accepts at most 50 allowlisted-author messages connected by known reply
+references, indexes old incoming/sent Message-IDs and supplies bounded prior
+human text to the new conversation. It never modifies original bytes, reruns
+old mail or imports an approval. Do not expose this function without operator
+authentication and do not join threads by subject.
+
 For a clean consumer, copy the complete modules, merge bindings/dependencies,
 and build. For an existing consumer, compare against its previous version and
 apply the same contract without overwriting unrelated application code. The
@@ -187,16 +218,15 @@ merge those additions into the consumer's actual manifests.
 
 ## Upgrade Guide
 
-### Version 1 — 2026-10-16
+${previousGuide.trim()}
 
-Initial version.
+### Version 3 — 2026-10-16
 
-### Version 2 — 2026-10-16
-
-Thread-aware ingress, current-delivery tools, durable human approval and a
-fully offline faux-model transport. Add the helper modules and direct pi-ai
-dependency, regenerate Env, and use the new creation data for new threads.
-The complete source/configuration delta follows.
+General conversation and in-thread memory, HTML-only body conversion with
+quoted-command preservation, explicit legacy reference/history import, and
+approval only for requested document actions. Add html-to-text and its types;
+install the history helper and keep the operator migration private. The full
+v2-to-v3 source/configuration delta follows.
 
 \`\`\`diff
 ${changes.join('\n')}
@@ -208,5 +238,5 @@ await writeFile(
 	introduction + modules + ending,
 );
 console.log(
-	'Regenerated Cloudflare Email Blueprint v2 from the executable example and frozen v1 baseline.',
+	'Regenerated Cloudflare Email Blueprint v3 from the executable example and frozen v2 baseline.',
 );

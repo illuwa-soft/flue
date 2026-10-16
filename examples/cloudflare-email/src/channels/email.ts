@@ -1,5 +1,6 @@
-// flue-blueprint: channel/cloudflare-email@2
+// flue-blueprint: channel/cloudflare-email@3
 import type { AgentDispatchRequest, DispatchReceipt } from '@flue/runtime';
+import { convert } from 'html-to-text';
 import PostalMime from 'postal-mime';
 
 const MAX_EMAIL_BYTES = 1024 * 1024;
@@ -28,7 +29,12 @@ function messageIds(value: string): string[] {
 }
 
 /** Index both incoming and sent Message-IDs under the receiving mailbox. / 수신함 범위에서 수신·발신 Message-ID를 모두 인덱싱합니다. */
-async function indexMessage(env: Env, messageId: string, threadId: string, owner: string) {
+export async function indexThreadMessage(
+	env: Env,
+	messageId: string,
+	threadId: string,
+	owner: string,
+) {
 	if (!messageId) return;
 	const key = `message-index/${await digest(JSON.stringify([env.EMAIL_RECIPIENT, messageId]))}.json`;
 	const indexed = await env.INBOX.put(key, JSON.stringify({ threadId, owner }), {
@@ -118,7 +124,7 @@ export async function receiveEmail(
 			throw new Error('Email identity conflict: existing message has different bytes.');
 		}
 	}
-	await indexMessage(env, messageIds(messageId)[0] ?? '', threadId, owner);
+	await indexThreadMessage(env, messageIds(messageId)[0] ?? '', threadId, owner);
 
 	const receipt = await admit({
 		id: `cloudflare-thread:${threadId}`,
@@ -135,20 +141,41 @@ export async function receiveEmail(
 	return { emailId, threadId, receipt };
 }
 
+/** Decode HTML-only mail with a parser and keep quoted approval commands visibly quoted. / HTML 전용 메일을 파서로 변환하고 인용된 승인 명령은 인용 상태를 유지합니다. */
+export function readableEmailText(email: { text?: string; html?: string }) {
+	if (email.text?.trim()) return email.text;
+	return convert(email.html ?? '', {
+		wordwrap: false,
+		selectors: [
+			{ selector: 'a', options: { ignoreHref: true } },
+			{ selector: 'div.gmail_quote', format: 'blockquote' },
+			{ selector: 'div.yahoo_quoted', format: 'blockquote' },
+		],
+	});
+}
+
 /** Load only the email bound to this instance; attachments remain metadata-only. / 인스턴스에 연결된 메일만 읽고 첨부파일은 메타데이터만 제공합니다. */
 export async function retrieveEmail(env: Env, emailId: string) {
 	const stored = await env.INBOX.get(emailKey(emailId));
 	if (!stored) throw new Error('Inbound email not found.');
 
 	const email = await PostalMime.parse(await stored.arrayBuffer());
+	let threadId = stored.customMetadata?.threadId;
+	if (!threadId) {
+		const link = await (
+			await env.INBOX.get(`legacy-links/${emailId}.json`)
+		)?.json<{ threadId: string }>();
+		threadId = link?.threadId;
+	}
+	const text = readableEmailText(email);
 	return {
-		threadId: stored.customMetadata?.threadId,
+		threadId,
 		from: email.from?.address,
 		envelopeFrom: stored.customMetadata?.from,
 		to: stored.customMetadata?.to,
 		subject: email.subject ?? '',
-		text: (email.text ?? email.html ?? '').slice(0, MAX_CONTEXT_CHARACTERS),
-		truncated: (email.text ?? email.html ?? '').length > MAX_CONTEXT_CHARACTERS,
+		text: text.slice(0, MAX_CONTEXT_CHARACTERS),
+		truncated: text.length > MAX_CONTEXT_CHARACTERS,
 		attachments: email.attachments.map(({ filename, mimeType }) => ({ filename, mimeType })),
 	};
 }
@@ -224,12 +251,15 @@ export async function replyToEmail(env: Env, emailId: string, text: string) {
 	const mail = {
 		from: env.EMAIL_RECIPIENT,
 		to: replyTo,
-		subject: `Re: ${email.subject ?? ''}`.slice(0, 200),
+		subject: `Re: ${(email.subject ?? '').replace(/^(?:\s*re:\s*)+/i, '')}`.slice(0, 200),
 		text,
 		headers,
 	};
 	const result = await sendMail(env, mail);
-	await indexMessage(env, result.messageId, metadata.threadId as string, replyTo);
+	let threadId = metadata.threadId;
+	if (!threadId) threadId = (await retrieveEmail(env, emailId)).threadId;
+	if (!threadId) throw new Error('Reply thread is missing.');
+	await indexThreadMessage(env, result.messageId, threadId, replyTo);
 	await env.INBOX.put(replyKey, JSON.stringify({ state: 'sent', messageId: result.messageId }));
 	return { messageId: result.messageId };
 }

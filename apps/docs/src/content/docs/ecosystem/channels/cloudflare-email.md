@@ -48,6 +48,13 @@ the asynchronous agent reply uses `env.EMAIL.send()`.
 
 ## Threaded human approval
 
+Version 3 adds ordinary conversational replies and in-thread memory. Greetings
+and questions do not become document tasks; only requested artifact operations
+use approval. HTML-only bodies are parsed into readable text while preserving
+quoted blocks, so quoted approval commands remain inert. The example also
+offers an administrator-only, explicitly selected v1 reference/history import
+without replaying any historical action.
+
 Version 2 adds an application-owned HITL example: one known email thread maps
 to one Flue conversation, while each mail keeps its own source id and current
 retrieval target. Known incoming and outgoing Message-IDs connect replies;

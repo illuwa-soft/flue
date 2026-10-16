@@ -49,13 +49,13 @@ async function save(env: Env, threadId: string, state: HitlState, etag?: string)
 /** Accept only an exact command on the first new, unquoted line. / 새로 작성한 첫 줄의 정확한 명령만 허용합니다. */
 export function parseDecision(text: string) {
 	const first = text.trimStart().split(/\r?\n/, 1)[0] ?? '';
-	const direct = /^(승인|approve|취소|cancel) ([a-f0-9]{32})\s*$/i.exec(first);
+	const direct = /^(승인|approve|취소|cancel)\s+([a-f0-9]{32})\s*$/i.exec(first);
 	if (direct) {
 		let action: 'approve' | 'cancel' = 'approve';
 		if (['취소', 'cancel'].includes((direct[1] ?? '').toLowerCase())) action = 'cancel';
 		return { action, token: direct[2] as string, change: '' };
 	}
-	const revision = /^(수정|revise) ([a-f0-9]{32}):\s*(.+)$/i.exec(first);
+	const revision = /^(수정|revise)\s+([a-f0-9]{32}):\s*(.+)$/i.exec(first);
 	if (revision)
 		return {
 			action: 'revise' as const,
@@ -63,6 +63,13 @@ export function parseDecision(text: string) {
 			change: revision[3] as string,
 		};
 	return undefined;
+}
+
+/** Distinguish explicit malformed decision attempts from ordinary conversation. / 명시적이지만 잘못된 결정 명령과 일반 대화를 구분합니다. */
+function decisionAttempt(text: string) {
+	return /^(승인|취소|수정|approve|cancel|revise)(?:\s|$)/i.test(
+		text.trimStart().split(/\r?\n/, 1)[0] ?? '',
+	);
 }
 
 /** Generate a short decision protocol that binds the exact stored document. / 저장된 문서에 연결된 결정 명령을 안내합니다. */
@@ -170,7 +177,7 @@ export async function handleHumanReply(
 
 	const command = parseDecision(email.text);
 	if (state.phase !== 'waiting' || !state.pending) {
-		if (command || state.phase === 'executing') {
+		if (command || decisionAttempt(email.text) || state.phase === 'executing') {
 			await replyToEmail(env, emailId, '현재 처리할 수 있는 승인 요청이 없습니다.');
 			return state;
 		}
@@ -188,6 +195,7 @@ export async function handleHumanReply(
 		await replyToEmail(env, emailId, '승인 요청이 만료되었습니다. 새 요청을 보내 주세요.');
 		return expired;
 	}
+	if (!command && !decisionAttempt(email.text)) return state;
 	if (!command || command.token !== state.pending.token) {
 		await replyToEmail(env, emailId, `유효한 새 승인 명령이 없습니다.\n\n${approvalText(state)}`);
 		return state;

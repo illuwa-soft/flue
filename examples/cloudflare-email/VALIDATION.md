@@ -1,5 +1,48 @@
 # Prototype validation
 
+## Conversational HTML mail v3
+
+The current implementation adds normal conversational replies, retained
+in-thread context, HTML-only text conversion and an explicit, authenticated
+legacy-thread reference/history importer. The importer preserves original
+bytes and does not replay old messages or approvals.
+
+Local checks cover HTML/blockquoted approvals, ordinary questions during a
+pending review, connected legacy import and prior-author access. The full
+workerd flow also checks HTML-only conversational recall in one Flue thread.
+Real deployment observations are recorded after the live verification below.
+
+Validated on 2026-10-16: **12/12** Node assertions, **1/1** full local workerd
+flow and **1/1** Blueprint v3 consumer/upgrade check. Worker typecheck/build and
+the actual site's CLI guide route passed. The workerd flow includes HTML-only
+ordinary conversation with retained context, chat during pending approval,
+HTML approval and restart recovery.
+
+### Authorized v3 live deployment
+
+The live Worker was updated to version
+`9ce0dfc0-571b-4bb8-82c1-069abe717612`. Five explicitly selected, connected v1
+human messages were indexed as prior context without replaying them or
+rewriting their source bytes.
+
+Observed live behavior:
+
+1. A new HTML-only reply in that existing thread correctly recalled the name
+   supplied in an earlier v1 email.
+2. A fresh document request created a pending plan. A later ordinary HTML-only
+   question recalled its earlier marker in the **same Flue conversation id**,
+   while the approval stayed pending and no artifact existed.
+3. An actual HTML email containing the current approval code (with an HTML
+   non-breaking space) completed the workflow. The resulting artifact exactly
+   matched the previously stored plan.
+4. All four outbound responses were found in the receiving mailbox application's
+   actual inbox records, with DKIM and DMARC passing. This was not inferred from
+   provider acceptance alone.
+
+Private mailbox ids, approval codes, admin credentials and deployment overrides
+are not part of this repository. The migration is an explicit admin operation;
+ordinary fresh threads use Flue's own conversation history directly.
+
 ## Threaded HITL v2 — local validation
 
 The current local example adds thread correlation, 24-hour one-time approvals,

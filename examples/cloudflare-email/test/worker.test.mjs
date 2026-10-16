@@ -40,14 +40,14 @@ test(
 		let worker = await unstable_dev('dist/flue_cloudflare_email/index.js', options);
 		const headers = { authorization: 'Bearer offline-test-token' };
 		const read = async (path) => (await worker.fetch(path, { headers })).json();
-		const send = async (id, text, parent = '') => {
+		const send = async (id, text, parent = '', contentType = 'text/plain') => {
 			const from = 'sender@example.net';
 			const to = 'support@example.com';
 			const messageId = `<${id}@example.net>`;
 			const emailId = createHash('sha256')
 				.update(JSON.stringify([from, to, messageId]))
 				.digest('hex');
-			const raw = `From: ${from}\r\nTo: ${to}\r\nMessage-ID: ${messageId}\r\nIn-Reply-To: ${parent}\r\nSubject: Native HITL test\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${text}`;
+			const raw = `From: ${from}\r\nTo: ${to}\r\nMessage-ID: ${messageId}\r\nIn-Reply-To: ${parent}\r\nSubject: Native HITL test\r\nContent-Type: ${contentType}; charset=utf-8\r\n\r\n${text}`;
 			const endpoint = `http://${worker.address}:${worker.port}/cdn-cgi/handler/email?${new URLSearchParams({ from, to })}`;
 			const response = await fetch(endpoint, { method: 'POST', body: raw });
 			assert.equal(response.status, 200, await response.text());
@@ -73,6 +73,10 @@ test(
 				(await read(conversation)).settlements?.some((item) => item.outcome === 'completed'),
 			);
 			const originalConversationId = (await read(conversation)).conversationId;
+			await send('pending-chat', '<p>계속 대화해도 되나요?</p>', firstMail.messageId, 'text/html');
+			const pendingChat = await sentFor('pending-chat');
+			assert.match(pendingChat.text, /계속 대화/);
+			assert.equal((await read(`/api/threads/${threadId}`)).pending.token, first.pending.token);
 			const revision = await send(
 				'revision',
 				`수정 ${first.pending.token}: Revised exact contents.`,
@@ -86,24 +90,24 @@ test(
 			await until(
 				async () =>
 					(await read(conversation)).settlements?.filter((item) => item.outcome === 'completed')
-						.length >= 2,
+						.length >= 3,
 			);
 			await worker.stop();
 			worker = await unstable_dev('dist/flue_cloudflare_email/index.js', options);
 			assert.equal((await read(`/api/threads/${threadId}`)).pending.token, revised.pending.token);
 			assert.equal((await read(conversation)).conversationId, originalConversationId);
-			const approvedText = `승인 ${revised.pending.token}\n\n> 승인 ${first.pending.token}`;
-			const approved = await send('approve', approvedText, revisedMail.messageId);
+			const approvedText = `<p>승인 ${revised.pending.token}</p><blockquote>승인 ${first.pending.token}</blockquote>`;
+			const approved = await send('approve', approvedText, revisedMail.messageId, 'text/html');
 			await sentFor('approve');
 			const done = await read(`/api/threads/${threadId}`);
 			assert.equal(done.phase, 'completed');
 			const artifact = await read(`/api/artifacts/${threadId}/${done.pending.id}`);
 			assert.equal(artifact.content, 'Revised exact contents.');
 			const beforeReplay = (await read('/api/local/outbox')).messages.length;
-			const replay = await send('approve', approvedText, revisedMail.messageId);
+			const replay = await send('approve', approvedText, revisedMail.messageId, 'text/html');
 			assert.equal(replay.receipt.submissionId, approved.receipt.submissionId);
 			assert.equal((await read('/api/local/outbox')).messages.length, beforeReplay);
-			const other = await send('cancel-root', 'A separate cancellable task.');
+			const other = await send('cancel-root', 'A separate document for cancellation.');
 			const otherMail = await sentFor('cancel-root');
 			const cancelState = await read(`/api/threads/${other.receipt.threadId}`);
 			await send('cancel', `취소 ${cancelState.pending.token}`, otherMail.messageId);
@@ -111,11 +115,32 @@ test(
 			assert.equal((await read(`/api/threads/${other.receipt.threadId}`)).phase, 'cancelled');
 			await until(async () => {
 				const settlements = (await read(conversation)).settlements ?? [];
-				return settlements.length >= 3 && settlements.every((item) => item.outcome === 'completed');
+				return settlements.length >= 4 && settlements.every((item) => item.outcome === 'completed');
 			});
 			const otherConversation = `/agents/email/${encodeURIComponent(`cloudflare-thread:${other.receipt.threadId}`)}?view=history`;
 			await until(async () => {
 				const settlements = (await read(otherConversation)).settlements ?? [];
+				return settlements.length >= 2 && settlements.every((item) => item.outcome === 'completed');
+			});
+			const remembered = await send(
+				'memory-first',
+				'<p>기억표식은 푸른달42입니다.</p>',
+				'',
+				'text/html',
+			);
+			const memoryMail = await sentFor('memory-first');
+			const recall = await send(
+				'memory-second',
+				'<p>앞에서 말한 표식이 뭐였지?</p>',
+				memoryMail.messageId,
+				'text/html',
+			);
+			const recallMail = await sentFor('memory-second');
+			assert.equal(recall.receipt.threadId, remembered.receipt.threadId);
+			assert.match(recallMail.text, /푸른달42/);
+			const chatConversation = `/agents/email/${encodeURIComponent(`cloudflare-thread:${remembered.receipt.threadId}`)}?view=history`;
+			await until(async () => {
+				const settlements = (await read(chatConversation)).settlements ?? [];
 				return settlements.length >= 2 && settlements.every((item) => item.outcome === 'completed');
 			});
 		} finally {

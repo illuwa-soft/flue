@@ -1,8 +1,10 @@
-# Threaded Cloudflare Email HITL
+# Threaded Cloudflare Email conversation and HITL
 
 An application-owned email approval example built on Flue's native Cloudflare
 entrypoint. Known email replies continue **one thread conversation**; individual
 messages retain their own retrieval target and delivery/reply idempotency keys.
+Ordinary questions receive ordinary replies using that conversation's history.
+Only requested document artifacts enter the human-approval flow.
 
 ```text
 email() → immutable R2 source → thread lookup → dispatch(EmailAssistant)
@@ -56,6 +58,18 @@ The local faux model copies the request/revision text into a document rather
 than generating prose with a real LLM. Approval saves **those exact contents**
 under `artifacts/<threadId>/<approvalId>.json`; it does not run arbitrary commands
 or publish anything externally.
+
+### Test ordinary conversation
+
+```sh
+pnpm --filter cloudflare-email-example email:local --text "기억표식은 푸른달42입니다."
+pnpm --filter cloudflare-email-example email:local --reply latest --text "앞에서 말한 표식이 뭐였지?"
+```
+
+The local mock echoes bounded prior human messages so the marker remains
+visible. The live model answers naturally from the same Flue conversation.
+Ordinary questions remain possible while a document is waiting for approval;
+they do not change its pending contents or consume its approval code.
 
 ### Restart and inspect
 
@@ -111,6 +125,9 @@ only in its local process. Running plain `vite dev` is not the offline demo.
   appropriate to the real operation before adapting this demo to sensitive work.
 - Source limit: **1 MiB**. Retrieved text: **16,000 characters**. Proposed
   document: **12,000 characters**. Attachments remain metadata-only.
+- HTML-only mail is converted with `html-to-text`; quoted blocks stay quoted
+  and cannot become first-line approval commands. Reply subjects are normalized
+  to one `Re:` prefix rather than accumulating prefixes.
 
 R2 owns approval state and immutable mail/artifacts; Flue owns the durable
 conversation and admission queue. `useAgentStart()` processes human decisions,
@@ -132,6 +149,8 @@ approve → duplicate → cancel flow, with successful Flue settlements rather t
 the v1 admission-only test. It uses isolated temporary persistence and never
 contacts live services. The installed Wrangler 4.116 native-email simulator
 uses `/cdn-cgi/handler/email`; this is not an application HTTP ingress route.
+It also verifies HTML-only questions, retained conversation context and normal
+chat during pending approval.
 
 ## Blueprint CLI development
 
@@ -151,10 +170,10 @@ FLUE_REGISTRY_URL=http://localhost:4321/cli/blueprints node packages/cli/bin/flu
 ```
 
 `add`/`update` print a coding-agent implementation guide; they do not edit the
-project themselves. The v2 consumer test verifies the actual site route and CLI,
+project themselves. The consumer test verifies the actual site route and CLI,
 then typechecks, tests and builds the guide's source in a clean consumer.
-`scripts/refresh-blueprint.mjs` regenerates v2 source/diff from the executable
-example and the fixed v1 commit; future published contract changes need a new
+`scripts/refresh-blueprint.mjs` regenerates v3 source/diff from the executable
+example and the fixed v2 commit while retaining earlier upgrade history; future published contract changes need a new
 version rather than rewriting history.
 
 ## Deploying deliberately
@@ -165,12 +184,26 @@ changes, build, dry-run and deploy. Preserve deployed migration history and
 existing Email Routing rules. Arbitrary-recipient sending currently requires
 Email Sending beta, Workers Paid and an onboarded sending domain.
 
-The v2 agent creation contract is `{ threadId, owner }`; v1 per-mail instances
-are not resumed as v2 approval tasks. New mail uses the new conversation prefix.
+The agent creation contract is `{ threadId, owner }`; v1 per-mail instances
+are not resumed as approval tasks. New mail uses the new conversation prefix.
 Do not replay historical mail as approved work. Committed example addresses are
 not personal deployment settings: keep real overrides private and explicit.
 Retention, sender authentication, real domain effects and notification recovery
 remain application responsibilities.
+
+### Explicit legacy conversation import
+
+An administrator may POST `{ "rootEmailId": "...", "emailIds": ["..."] }` to
+`/api/admin/legacy-thread`, with the private deployment admin bearer token.
+Select **1–50** v1 mail records from the same allowlisted author, including the
+root and required intermediate replies. The importer validates a connected
+reference chain, indexes incoming/sent Message-IDs and supplies bounded prior
+human text to the new conversation. It does not rewrite raw mail, merge the
+old Flue record logs, replay submissions or carry over any approval.
+
+This is an explicit operator action, not automatic subject matching. A
+conflicting existing link is rejected. Ordinary fresh threads do not need an
+import; their conversation context is retained directly by Flue.
 
 See [VALIDATION.md](./VALIDATION.md) for the exact scope of local and historical
 live checks, and [Discussion #864](https://github.com/withastro/flue/discussions/864)
