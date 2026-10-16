@@ -1,4 +1,4 @@
-// flue-blueprint: channel/cloudflare-email@1
+// flue-blueprint: channel/cloudflare-email@2
 import type { AgentDispatchRequest, DispatchReceipt } from '@flue/runtime';
 import PostalMime from 'postal-mime';
 
@@ -18,6 +18,48 @@ async function digest(value: string | ArrayBuffer): Promise<string> {
 function emailKey(emailId: string): string {
 	if (!/^[a-f0-9]{64}$/.test(emailId)) throw new TypeError('Invalid email id.');
 	return `inbound/${emailId}.eml`;
+}
+
+/** Parse bounded RFC message references, never a subject-based conversation guess. / 제목 대신 제한된 RFC 메시지 참조로 대화를 연결합니다. */
+function messageIds(value: string): string[] {
+	const ids = value.match(/<[^<>\s]+>/g) ?? [];
+	if (ids.length > 100) throw new Error('Too many email references.');
+	return ids;
+}
+
+/** Index both incoming and sent Message-IDs under the receiving mailbox. / 수신함 범위에서 수신·발신 Message-ID를 모두 인덱싱합니다. */
+async function indexMessage(env: Env, messageId: string, threadId: string, owner: string) {
+	if (!messageId) return;
+	const key = `message-index/${await digest(JSON.stringify([env.EMAIL_RECIPIENT, messageId]))}.json`;
+	const indexed = await env.INBOX.put(key, JSON.stringify({ threadId, owner }), {
+		onlyIf: { etagDoesNotMatch: '*' },
+	});
+	if (indexed) return;
+	const existing = await (await env.INBOX.get(key))?.json<{ threadId: string; owner: string }>();
+	if (existing?.threadId !== threadId || existing.owner !== owner)
+		throw new Error('Message reference conflict.');
+}
+
+/** Resolve a known thread only for its original participant. / 원래 참여자에게만 기존 스레드를 연결합니다. */
+async function resolveThread(env: Env, headers: Headers, emailId: string, owner: string) {
+	const candidates = messageIds(
+		[
+			headers.get('in-reply-to') ?? '',
+			headers.get('references') ?? '',
+			headers.get('message-id') ?? '',
+		].join(' '),
+	);
+	let threadId: string | undefined;
+	for (const candidate of candidates) {
+		const key = `message-index/${await digest(JSON.stringify([env.EMAIL_RECIPIENT, candidate]))}.json`;
+		const found = await (await env.INBOX.get(key))?.json<{ threadId: string; owner: string }>();
+		if (!found) continue;
+		if (found.owner !== owner) throw new Error('Thread participant does not match.');
+		if (threadId && threadId !== found.threadId)
+			throw new Error('Ambiguous email thread references.');
+		threadId = found.threadId;
+	}
+	return threadId ?? emailId;
 }
 
 /** Persist original bytes before durable admission; retry the same delivery with the same key. / 원문 저장 후 영속 접수하며 재전달에는 동일 키를 사용합니다. */
@@ -46,11 +88,21 @@ export async function receiveEmail(
 	const identity = messageId || rawHash;
 	const emailId = await digest(JSON.stringify([message.from, message.to, identity]));
 	const key = emailKey(emailId);
+	const existing = await env.INBOX.get(key);
+	if (existing && existing.customMetadata?.rawHash !== rawHash) {
+		throw new Error('Email identity conflict: existing message has different bytes.');
+	}
+	const parsed = await PostalMime.parse(raw);
+	const owner = parsed.from?.address;
+	if (!owner) throw new Error('Email author is missing.');
+	const threadId = await resolveThread(env, message.headers, emailId, owner);
 	const customMetadata = {
 		from: message.from,
 		to: message.to,
 		messageId,
 		rawHash,
+		threadId,
+		owner,
 		subject: message.headers.get('subject') ?? '',
 		autoSubmitted: message.headers.get('auto-submitted') ?? 'no',
 		listId: message.headers.get('list-id') ?? '',
@@ -66,20 +118,21 @@ export async function receiveEmail(
 			throw new Error('Email identity conflict: existing message has different bytes.');
 		}
 	}
+	await indexMessage(env, messageIds(messageId)[0] ?? '', threadId, owner);
 
 	const receipt = await admit({
-		id: `cloudflare-email:${emailId}`,
+		id: `cloudflare-thread:${threadId}`,
 		idempotencyKey: emailId,
-		initialData: { emailId },
+		initialData: { threadId, owner },
 		message: {
 			kind: 'signal',
 			type: 'cloudflare.email.received',
 			body: customMetadata.subject,
-			attributes: { emailId, from: message.from, to: message.to },
+			attributes: { emailId, threadId, from: message.from, to: message.to },
 		},
 	});
-	await env.INBOX.put(`receipts/${emailId}.json`, JSON.stringify(receipt));
-	return { emailId, receipt };
+	await env.INBOX.put(`receipts/${emailId}.json`, JSON.stringify({ ...receipt, threadId }));
+	return { emailId, threadId, receipt };
 }
 
 /** Load only the email bound to this instance; attachments remain metadata-only. / 인스턴스에 연결된 메일만 읽고 첨부파일은 메타데이터만 제공합니다. */
@@ -89,6 +142,7 @@ export async function retrieveEmail(env: Env, emailId: string) {
 
 	const email = await PostalMime.parse(await stored.arrayBuffer());
 	return {
+		threadId: stored.customMetadata?.threadId,
 		from: email.from?.address,
 		envelopeFrom: stored.customMetadata?.from,
 		to: stored.customMetadata?.to,
@@ -97,6 +151,39 @@ export async function retrieveEmail(env: Env, emailId: string) {
 		truncated: (email.text ?? email.html ?? '').length > MAX_CONTEXT_CHARACTERS,
 		attachments: email.attachments.map(({ filename, mimeType }) => ({ filename, mimeType })),
 	};
+}
+
+/** Require the current delivery to belong to this thread and participant. / 현재 전달된 메일이 이 스레드와 참여자에게 속하는지 확인합니다. */
+export async function retrieveThreadEmail(
+	env: Env,
+	threadId: string,
+	owner: string,
+	emailId: string,
+) {
+	const email = await retrieveEmail(env, emailId);
+	if (email.threadId !== threadId || email.from !== owner)
+		throw new Error('Email is outside this thread.');
+	return email;
+}
+
+/** Local mode records a simulated outbox; live mode uses the native binding. / 로컬 모드는 가상 발신함에 기록하고 실환경은 네이티브 바인딩을 사용합니다. */
+async function sendMail(
+	env: Env,
+	mail: {
+		from: string;
+		to: string;
+		subject: string;
+		text: string;
+		headers: Record<string, string>;
+	},
+) {
+	if (String(env.EMAIL_MODE) !== 'local') return env.EMAIL.send(mail);
+	const messageId = `<local-${crypto.randomUUID()}@example.invalid>`;
+	await env.INBOX.put(
+		`outbox/${Date.now()}-${crypto.randomUUID()}.json`,
+		JSON.stringify({ ...mail, messageId }),
+	);
+	return { messageId };
 }
 
 /** Reserve a reply before sending; an uncertain outcome requires operator reconciliation. / 발송 전 답장을 선점하고 불확실한 결과는 운영자 확인 대상으로 남깁니다. */
@@ -134,13 +221,15 @@ export async function replyToEmail(env: Env, emailId: string, text: string) {
 		headers['In-Reply-To'] = metadata.messageId as string;
 		headers.References = metadata.messageId as string;
 	}
-	const result = await env.EMAIL.send({
+	const mail = {
 		from: env.EMAIL_RECIPIENT,
 		to: replyTo,
 		subject: `Re: ${email.subject ?? ''}`.slice(0, 200),
 		text,
 		headers,
-	});
+	};
+	const result = await sendMail(env, mail);
+	await indexMessage(env, result.messageId, metadata.threadId as string, replyTo);
 	await env.INBOX.put(replyKey, JSON.stringify({ state: 'sent', messageId: result.messageId }));
 	return { messageId: result.messageId };
 }

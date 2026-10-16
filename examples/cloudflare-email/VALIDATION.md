@@ -1,5 +1,29 @@
 # Prototype validation
 
+## Threaded HITL v2 — local validation
+
+The current local example adds thread correlation, 24-hour one-time approvals,
+revision/cancellation and an idempotent document artifact. Its workerd test runs
+the actual Flue conversation and a faux model through request → revision →
+process restart → approval → duplicate email → cancellation, forcing all
+bindings local. No model or email network service is contacted.
+
+Run `dev:local` / `email:local` as described in README for an interactive manual
+check. The v2 source is checked by the Node assertions, Worker typecheck/build,
+full local workerd flow and v2 Blueprint consumer test. Live v2 mailbox behavior
+has not been claimed by these checks; the deployment observations below apply
+to the previously validated **v1** prototype.
+
+Results: **9/9** Node assertion tests, **1/1** complete workerd flow (including
+successful settlements after restart), and **1/1** Blueprint consumer test. The
+latter also checks/applies the complete v1 → v2 upgrade diff and compares its
+modules with the current guide. A manual run of the documented `email:local`
+CLI completed request → revision → approval and retrieved the exact approved
+artifact from the local server. Typecheck, Worker/docs build and scoped
+lint/format checks complete the verification.
+
+## Message-scoped v1 — historical live validation
+
 Validated on 2026-10-16 against Flue 2.3.0, Node 26.5.0, pnpm 11.1.1,
 Wrangler 4.116.0 and Vite 8.1.5.
 

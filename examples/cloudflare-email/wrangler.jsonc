@@ -7,6 +7,7 @@
 	"r2_buckets": [{ "binding": "INBOX", "bucket_name": "flue-cloudflare-email-inbox" }],
 	"send_email": [{ "name": "EMAIL" }],
 	"vars": {
+		"EMAIL_MODE": "live",
 		"EMAIL_RECIPIENT": "support@example.com",
 		"EMAIL_REPLY_ALLOWED_SENDERS": ""
 	},

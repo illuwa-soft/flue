@@ -55,11 +55,13 @@ test(
 				{ env },
 			);
 			assert.equal(add.stdout, update.stdout);
-			assert.ok(add.stdout.includes('flue-blueprint: channel/cloudflare-email@1'));
+			assert.ok(add.stdout.includes('flue-blueprint: channel/cloudflare-email@2'));
 			const blocks = [...guide.matchAll(/```ts\n([\s\S]*?)\n```/g)].map((match) => match[1]);
-			assert.equal(blocks.length, 3);
+			assert.equal(blocks.length, 5);
 			const destinations = [
 				'src/channels/email.ts',
+				'src/hitl.ts',
+				'src/local-model.ts',
 				'src/agents/email-assistant.ts',
 				'src/cloudflare.ts',
 			];
@@ -105,6 +107,43 @@ test(
 			await execute('pnpm', ['exec', 'tsc', '--noEmit'], options);
 			await execute(process.execPath, ['--test', 'test/email.test.mjs'], options);
 			await execute('pnpm', ['exec', 'vite', 'build'], options);
+			const upgrade = path.join(consumer, 'upgrade');
+			const baseline = 'a08b84e50d3474bb32383f33cd04a35e3034064a';
+			for (const destination of [...destinations, 'wrangler.jsonc']) {
+				const result = await execute(
+					'git',
+					['show', `${baseline}:examples/cloudflare-email/${destination}`],
+					{ cwd: root },
+				).catch((error) => {
+					if (error.code === 128) return { stdout: '' };
+					throw error;
+				});
+				if (!result.stdout) continue;
+				await mkdir(path.dirname(path.join(upgrade, destination)), { recursive: true });
+				await writeFile(path.join(upgrade, destination), result.stdout);
+			}
+			const oldPackage = await execute(
+				'git',
+				['show', `${baseline}:examples/cloudflare-email/package.json`],
+				{ cwd: root },
+			);
+			await writeFile(
+				path.join(upgrade, 'package.json'),
+				`${JSON.stringify({ dependencies: JSON.parse(oldPackage.stdout).dependencies }, null, 2)}\n`,
+			);
+			const upgradeDiff = [...guide.matchAll(/```diff\n([\s\S]*?)\n```/g)].at(-1)?.[1];
+			assert.ok(upgradeDiff);
+			const diffFile = path.join(consumer, 'v2.patch');
+			await writeFile(diffFile, `${upgradeDiff}\n`);
+			const directory = `--directory=${path.relative(root, upgrade)}`;
+			await execute('git', ['apply', '--check', directory, diffFile], { cwd: root });
+			await execute('git', ['apply', directory, diffFile], { cwd: root });
+			for (const [index, destination] of destinations.entries()) {
+				assert.equal(
+					(await readFile(path.join(upgrade, destination), 'utf8')).trim(),
+					blocks[index].trim(),
+				);
+			}
 		} finally {
 			server.closeAllConnections();
 			await new Promise((resolve) => server.close(resolve));

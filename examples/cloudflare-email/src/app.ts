@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { EmailAssistant } from './agents/email-assistant.ts';
 import { retrieveEmail } from './channels/email.ts';
+import { readHitlState } from './hitl.ts';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -17,6 +18,42 @@ app.use('*', async (c, next) => {
 	return bearerAuth<{ Bindings: Env }>({ token: env.ADMIN_TOKEN })(c, next);
 });
 app.route('/agents/email', createAgentRouter(EmailAssistant));
+
+/** Inspect simulated mail only in explicitly selected local mode. / 명시적인 로컬 모드에서만 가상 발신 메일을 조회합니다. */
+app.get('/api/local/outbox', async (c) => {
+	if (String(env.EMAIL_MODE) !== 'local') return c.body(null, 404);
+	const listed = await env.INBOX.list({
+		prefix: 'outbox/',
+		limit: 100,
+		cursor: c.req.query('cursor'),
+	});
+	const messages = await Promise.all(
+		listed.objects.map(async ({ key }) => ({
+			key,
+			...((await (await env.INBOX.get(key))?.json()) as object),
+		})),
+	);
+	let cursor: string | undefined;
+	if (listed.truncated) cursor = listed.cursor;
+	return c.json({ messages, truncated: listed.truncated, cursor });
+});
+
+/** Read application-owned approval state; approval codes remain behind admin authentication. / 승인 코드는 관리자 인증 뒤에 두고 애플리케이션 상태를 조회합니다. */
+app.get('/api/threads/:id', async (c) => {
+	const threadId = c.req.param('id');
+	if (!/^[a-f0-9]{64}$/.test(threadId)) return c.body(null, 400);
+	return c.json(await readHitlState(env, threadId));
+});
+
+/** Download only validated artifact keys from the authenticated operational surface. / 인증된 운영 경로에서 검증된 아티팩트 키만 내려받습니다. */
+app.get('/api/artifacts/:threadId/:approvalId', async (c) => {
+	const { threadId, approvalId } = c.req.param();
+	if (!/^[a-f0-9]{64}$/.test(threadId) || !/^[a-f0-9-]{36}$/.test(approvalId))
+		return c.body(null, 400);
+	const artifact = await env.INBOX.get(`artifacts/${threadId}/${approvalId}.json`);
+	if (!artifact) return c.body(null, 404);
+	return c.json(await artifact.json());
+});
 
 /** List admission identifiers for authenticated operational checks. / 인증된 운영 검증을 위해 접수 식별자를 나열합니다. */
 app.get('/api/emails', async (c) => {

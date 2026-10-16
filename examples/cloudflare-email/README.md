@@ -1,129 +1,177 @@
-# Cloudflare Email Service example
+# Threaded Cloudflare Email HITL
 
-A Cloudflare-only, project-owned email integration. Native Email Routing events
-enter through `src/cloudflare.ts`; no public HTTP webhook accepts email.
+An application-owned email approval example built on Flue's native Cloudflare
+entrypoint. Known email replies continue **one thread conversation**; individual
+messages retain their own retrieval target and delivery/reply idempotency keys.
 
 ```text
-Email Routing → email() → conditional R2 write → dispatch(EmailAssistant)
-  → durable agent admission → retrieve_cloudflare_email → reply_to_cloudflare_email
+email() → immutable R2 source → thread lookup → dispatch(EmailAssistant)
+  → draft exact document → email approval request → idle
+human reply → same conversation → validate code/expiry → save approved artifact
 ```
 
-## Setup
+## Try it locally — no Cloudflare login, email account or model key
 
-From the repository root:
+Run from the repository root (Node >=22.19.0, pnpm 11):
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm exec turbo run build --filter=@flue/vite...
+pnpm exec turbo run build --filter=@flue/cli...
 pnpm --filter cloudflare-email-example cf-typegen
+pnpm --filter cloudflare-email-example dev:local
+```
+
+The server listens on **127.0.0.1:8787**. It uses the actual built Worker,
+native email simulator, generated Flue Durable Object and a deterministic Pi
+faux model. Outbound email is saved in a local R2 outbox; no external model or
+mail service is called. Initial dependency installation may need the registry.
+
+In a second terminal, also at the repository root:
+
+```sh
+pnpm --filter cloudflare-email-example email:local --text "회의 결과를 정리하는 문서를 작성해 주세요."
+```
+
+The command prints the thread id and a simulated approval email with a fresh
+32-character code. Copy that code; the following commands use `CODE` as a
+placeholder. **Replace it with the actual code.**
+
+```sh
+# Request a revision in the same email thread.
+pnpm --filter cloudflare-email-example email:local --reply latest --text "수정 CODE: 결정 사항과 다음 할 일을 구분해 주세요."
+
+# The revised approval email contains a NEW code. Approve that code.
+pnpm --filter cloudflare-email-example email:local --reply latest --text "승인 NEW_CODE"
+
+# Inspect the simulated emails, including their Message-IDs.
+pnpm --filter cloudflare-email-example outbox:local
+```
+
+To cancel a pending request, reply with `취소 CODE`. English `approve CODE`,
+`revise CODE: instruction`, and `cancel CODE` also work. `--reply latest` selects
+the last simulated outgoing email; when testing several threads, pass an exact
+`--reply '<local-…@example.invalid>'` Message-ID instead.
+
+The local faux model copies the request/revision text into a document rather
+than generating prose with a real LLM. Approval saves **those exact contents**
+under `artifacts/<threadId>/<approvalId>.json`; it does not run arbitrary commands
+or publish anything externally.
+
+### Restart and inspect
+
+Stop the server with Ctrl+C while it is awaiting approval. Start `dev:local`
+again and reply to the same approval message. Workflow state, mail, reference
+indexes, outbox and the Flue conversation persist under `.wrangler/local-hitl`.
+You can test a new independent task by omitting `--reply`.
+
+All HTTP routes other than `/health` require authentication. The local runner
+uses the public **local-only demo value** `Bearer local-demo-only`:
+
+| Route                                                     | Purpose                                                    |
+| --------------------------------------------------------- | ---------------------------------------------------------- |
+| `/api/local/outbox`                                       | Paginated simulated mail, available only in local mode.    |
+| `/api/emails`                                             | Paginated admitted email identifiers.                      |
+| `/api/emails/<emailId>`                                   | Current mail and receipt (including threadId).             |
+| `/api/threads/<threadId>`                                 | Approval phase, revision, pending plan/code, artifact key. |
+| `/api/artifacts/<threadId>/<approvalId>`                  | The approved JSON document.                                |
+| `/agents/email/cloudflare-thread:<threadId>?view=history` | Full Flue conversation.                                    |
+
+For example, replace `THREAD_ID` with the printed value:
+
+```sh
+curl -H 'Authorization: Bearer local-demo-only' http://127.0.0.1:8787/api/threads/THREAD_ID
+```
+
+Do not use the local demo token on a deployed Worker. The normal Wrangler config
+defaults to `EMAIL_MODE: "live"`; the local runner overrides mode and credentials
+only in its local process. Running plain `vite dev` is not the offline demo.
+
+## Real email behavior
+
+- The first mail starts a `cloudflare-thread:<threadId>` conversation. Known
+  `In-Reply-To` / `References` point later mail to it, including replies to the
+  agent's outgoing messages. Subjects do not identify conversations.
+- Another author cannot join a known thread by copying its references.
+  Forwarded and multi-party approvals are outside this example's scope.
+- Each proposal saves exact title/content, a fresh **128-bit code** and a
+  **24-hour expiry**. The first new plain-text line must be the complete command.
+  Quoted commands, a bare `승인`, old codes and expired codes do not execute work.
+- A revision invalidates the prior request. Approval/cancellation compete through
+  R2 conditional writes; only the selected state transition proceeds.
+- Approval executes the saved plan in application code before model work. The
+  artifact is created conditionally under the approval id, so recovery can
+  repeat the write without duplicating the artifact.
+- Each incoming mail can receive one reply. Interrupted/ambiguous sends remain
+  reserved as `sending` and need operator reconciliation. No R2/email
+  cross-service exactly-once guarantee is claimed.
+- The recipient is bound to an allowlisted parsed MIME From author, never a
+  model argument or Reply-To. SMTP envelopes may be provider bounce addresses.
+  A From allowlist is not sender authentication: the approval code is a bearer
+  secret delivered to that mailbox. Use authenticated sender/identity policy
+  appropriate to the real operation before adapting this demo to sensitive work.
+- Source limit: **1 MiB**. Retrieved text: **16,000 characters**. Proposed
+  document: **12,000 characters**. Attachments remain metadata-only.
+
+R2 owns approval state and immutable mail/artifacts; Flue owns the durable
+conversation and admission queue. `useAgentStart()` processes human decisions,
+and the model's proposal tool uses `terminate: true` to end the response rather
+than waiting on a running tool call for a human.
+
+## Verify
+
+```sh
 pnpm --filter cloudflare-email-example check:types
 pnpm --filter cloudflare-email-example test
 pnpm --filter cloudflare-email-example build
 pnpm --filter cloudflare-email-example test:workerd
+pnpm --filter cloudflare-email-example test:blueprint
 ```
+
+The workerd check now covers the complete offline request → revise → restart →
+approve → duplicate → cancel flow, with successful Flue settlements rather than
+the v1 admission-only test. It uses isolated temporary persistence and never
+contacts live services. The installed Wrangler 4.116 native-email simulator
+uses `/cdn-cgi/handler/email`; this is not an application HTTP ingress route.
 
 ## Blueprint CLI development
 
 The upstream public registry does not publish this fork's blueprint. Build the
-fork CLI and run the fork website locally:
+fork CLI and run its site locally:
 
 ```sh
 pnpm exec turbo run build --filter=@flue/cli...
 pnpm --filter apps-www dev
 ```
 
-In a second terminal, use the **local-development-only** registry override,
-adjusting port 4321 to the port printed by Astro:
+In another terminal (adjust port 4321 to Astro's actual port):
 
 ```sh
 FLUE_REGISTRY_URL=http://localhost:4321/cli/blueprints node packages/cli/bin/flue.mjs add channel cloudflare-email --print
 FLUE_REGISTRY_URL=http://localhost:4321/cli/blueprints node packages/cli/bin/flue.mjs update channel cloudflare-email --print
-pnpm --filter cloudflare-email-example test:blueprint
 ```
 
-The blueprint test exercises the actual website route and fork CLI, extracts
-the guide's complete source into a disposable consumer, runs its assertion
-tests, typechecks and builds it. `add`/`update` print instructions; they do not
-edit a project by themselves. Preservation of custom changes remains a coding
-agent/manual review responsibility, not a guarantee made by this test.
+`add`/`update` print a coding-agent implementation guide; they do not edit the
+project themselves. The v2 consumer test verifies the actual site route and CLI,
+then typechecks, tests and builds the guide's source in a clean consumer.
+`scripts/refresh-blueprint.mjs` regenerates v2 source/diff from the executable
+example and the fixed v1 commit; future published contract changes need a new
+version rather than rewriting history.
 
-`test` uses Node assertions, synthetic email, and fake bindings. `test:workerd`
-loads the built Worker, injects a native email event, verifies actual local R2
-storage and durable dispatch admission, repeats the event, and checks HTTP
-authorization. It forces local bindings: Workers AI is unavailable and the agent
-model operation fails locally. This test proves admission, not LLM completion or
-real delivery. It never sends real email. The installed Wrangler 4.116 simulator
-uses `/cdn-cgi/handler/email`; newer documentation describes
-`/cdn-cgi/local/email`. Use the endpoint supported by the installed Wrangler.
+## Deploying deliberately
 
-Before deployment:
+Configure an application-owned R2 bucket, `send_email` binding, receiving
+mailbox, sender allowlist and a private `ADMIN_TOKEN`. Generate Env after config
+changes, build, dry-run and deploy. Preserve deployed migration history and
+existing Email Routing rules. Arbitrary-recipient sending currently requires
+Email Sending beta, Workers Paid and an onboarded sending domain.
 
-1. Choose a Worker name and R2 bucket. Create the bucket and set its name in
-   `wrangler.jsonc`.
-2. Set `EMAIL_RECIPIENT` to the exact mailbox handled by this Worker.
-3. Set `EMAIL_REPLY_ALLOWED_SENDERS` to comma-separated addresses allowed to
-   receive automatic replies. Empty disables all replies. This is demonstration
-   application policy, not authentication of the sender or a framework default.
-4. Set `ADMIN_TOKEN` with `wrangler secret put ADMIN_TOKEN`. Store local secrets
-   in the ignored `.dev.vars` file. Never commit them.
-5. Build and run `wrangler deploy --dry-run`, then deploy. Configure the exact
-   address in Email Routing to send to this Worker. Back up an existing rule
-   before changing its destination.
-6. For arbitrary-recipient outbound mail, enable Email Sending on the domain
-   and use Workers Paid. The account must have access to the current beta.
+The v2 agent creation contract is `{ threadId, owner }`; v1 per-mail instances
+are not resumed as v2 approval tasks. New mail uses the new conversation prefix.
+Do not replay historical mail as approved work. Committed example addresses are
+not personal deployment settings: keep real overrides private and explicit.
+Retention, sender authentication, real domain effects and notification recovery
+remain application responsibilities.
 
-The compatibility date is deliberately within the installed workerd support
-window. Rerun `cf-typegen` whenever the Wrangler bindings change; the generated
-`worker-configuration.d.ts` is ignored.
-
-## Behavior and limits
-
-- A maximum **1 MiB** inbound message is stored as immutable RFC 5322 bytes.
-- Identity is SHA-256 of `[envelope from, envelope to, Message-ID]`, falling
-  back to the raw digest when Message-ID is absent. This is an application
-  convention: Cloudflare provides no Resend/Svix delivery id here. A reused
-  identity with different bytes is a conflict, not a silently overwritten mail.
-- Storage completes before dispatch. The email id is also Flue's
-  `idempotencyKey`. Dispatch failures can be retried without losing the source.
-  Each inbound message has its own agent instance; this is not conversation
-  grouping by `References`.
-- MIME parsing uses `postal-mime`; tools return at most **16,000 characters**
-  and attachment metadata, never arbitrary attachment contents.
-- Replies target the parsed `From` author only when explicitly allowlisted,
-  ignoring model-selected recipients and the untrusted `Reply-To` header. The
-  SMTP envelope can be a provider bounce address and is kept separately. A
-  `From` allowlist alone does not authenticate the sender. The configured receiving
-  mailbox is the outbound sender. Automated/list messages are not replied to.
-- A conditional R2 reply reservation prevents concurrent/ordinary duplicate
-  sends. If sending or recording its result fails, the reservation remains
-  `sending`. This is an **uncertain outcome**, not proof of failure: reconcile
-  provider delivery before manually clearing it. Email Sending has no atomic
-  transaction with R2, so this is not an exactly-once delivery guarantee.
-- `Auto-Submitted`, `In-Reply-To`, and `References` are added to replies.
-  Each message id maps to one response; original thread history is not restored.
-
-## Inspect a deployed test
-
-`GET /health` is public. All other HTTP routes require `Authorization: Bearer
-<ADMIN_TOKEN>`. The administrative routes are:
-
-- `GET /api/emails/<emailId>` — bounded content, dispatch receipt and reply state.
-- `GET /api/emails` — paginated admission identifiers, with a continuation cursor.
-- `/agents/email/cloudflare-email:<emailId>` — Flue conversation API.
-
-To verify actual delivery, send a uniquely titled mail from an allowed test
-sender to the configured mailbox. Inspect the R2 receipt and the settled Flue
-conversation, then verify the reply in the sender's inbox. A returned outbound
-`messageId` proves provider acceptance, not inbox arrival. Test a duplicate
-separately and confirm it reuses the submission and reply state.
-
-R2 retains source email and operation records until the application deletes
-them; choose an explicit retention/access policy before using real customer
-mail. Model-visible email is untrusted content. Credentials, source bytes and
-attachment content are never embedded in the dispatched signal.
-
-## Related
-
-- [Flue Cloudflare extensions](https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint)
-- [Cloudflare Email Service](https://developers.cloudflare.com/email-service/)
-- [Feature proposal](https://github.com/withastro/flue/discussions/864)
+See [VALIDATION.md](./VALIDATION.md) for the exact scope of local and historical
+live checks, and [Discussion #864](https://github.com/withastro/flue/discussions/864)
+for upstream integration discussion.

@@ -4,6 +4,9 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
+		"dev:local": "vite build && node scripts/local.mjs serve",
+		"email:local": "node scripts/local.mjs send",
+		"outbox:local": "node scripts/local.mjs outbox",
 		"build": "vite build",
 		"deploy": "vite build && wrangler deploy",
 		"cf-typegen": "wrangler types",
@@ -13,6 +16,7 @@
 		"test:blueprint": "node --test test/blueprint.test.mjs"
 	},
 	"dependencies": {
+		"@earendil-works/pi-ai": "^1.1.0",
 		"@flue/runtime": "workspace:*",
 		"hono": "^4.12.32",
 		"postal-mime": "^2.6.0",
