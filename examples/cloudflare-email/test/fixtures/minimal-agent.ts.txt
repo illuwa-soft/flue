@@ -1,0 +1,15 @@
+'use agent';
+
+import { useModel } from '@flue/runtime';
+import { useCloudflareEmail } from '@illuwa-soft/flue-cloudflare-email';
+import { email } from '../email-channel.ts';
+import { installLocalModel } from '../local-model.ts';
+
+installLocalModel(true);
+
+/** Consume the channel without application-specific retrieval or reply tools. / 앱 전용 조회·답장 도구 없이 채널을 소비합니다. */
+export function EmailAssistant() {
+	useModel('email-local/assistant');
+	useCloudflareEmail(email);
+	return 'Read the delivered email and reply using its messageRef.';
+}

@@ -1,8 +1,83 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { receiveEmail, replyToEmail, retrieveEmail } from '@illuwa-soft/flue-cloudflare-email';
+import {
+	receiveEmail as receive,
+	replyToEmail as reply,
+	retrieveEmail as retrieve,
+} from '@illuwa-soft/flue-cloudflare-email';
+import { emailContext } from '../src/email.ts';
 import { importLegacyThread, readThreadHistory } from '../src/history.ts';
 import { handleHumanReply, parseDecision, proposeApproval, readHitlState } from '../src/hitl.ts';
+
+// Exercise the example's explicit context and sending policy, not a package-owned Env.
+const receiveEmail = (message, env, admit) => receive(message, emailContext(env), admit);
+const replyToEmail = (env, id, text) => reply(emailContext(env), id, text);
+const retrieveEmail = (env, id) => retrieve(emailContext(env), id);
+
+test('fixed conversation keeps independent thread approvals isolated', async () => {
+	let sent = 0;
+	const env = {
+		INBOX: new MemoryBucket(),
+		EMAIL_RECIPIENT: 'support@example.com',
+		EMAIL_REPLY_ALLOWED_SENDERS: 'sender@example.net',
+		EMAIL: {
+			async send() {
+				return { messageId: `<fixed-${++sent}@example.com>` };
+			},
+		},
+	};
+	const context = { ...emailContext(env), channelId: 'shared-room' };
+	const requests = [];
+	const admit = async (request) => {
+		requests.push(request);
+		return { submissionId: request.idempotencyKey };
+	};
+	const first = await receive(humanMail('fixed-a', 'Document A'), context, admit);
+	const second = await receive(humanMail('fixed-b', 'Document B'), context, admit);
+	assert.equal(requests[0].id, requests[1].id);
+	assert.notEqual(first.threadId, second.threadId);
+	await proposeApproval(
+		env,
+		first.threadId,
+		'sender@example.net',
+		first.emailId,
+		{ title: 'A', content: 'A' },
+		'tool-a',
+	);
+	await proposeApproval(
+		env,
+		second.threadId,
+		'sender@example.net',
+		second.emailId,
+		{ title: 'B', content: 'B' },
+		'tool-b',
+	);
+	const firstState = await readHitlState(env, first.threadId);
+	const secondState = await readHitlState(env, second.threadId);
+	const wrong = await receive(
+		humanMail('fixed-wrong', `approve ${secondState.pending.token}`, '<fixed-a@example.net>'),
+		context,
+		admit,
+	);
+	await handleHumanReply(env, first.threadId, 'sender@example.net', wrong.emailId);
+	assert.equal((await readHitlState(env, first.threadId)).pending.token, firstState.pending.token);
+	assert.equal(
+		(await readHitlState(env, second.threadId)).pending.token,
+		secondState.pending.token,
+	);
+	assert.equal(
+		[...env.INBOX.objects.keys()].some((key) => key.startsWith('artifacts/')),
+		false,
+	);
+	const correct = await receive(
+		humanMail('fixed-correct', `approve ${secondState.pending.token}`, '<fixed-b@example.net>'),
+		context,
+		admit,
+	);
+	await handleHumanReply(env, second.threadId, 'sender@example.net', correct.emailId);
+	assert.equal((await readHitlState(env, second.threadId)).phase, 'completed');
+	assert.equal((await readHitlState(env, first.threadId)).phase, 'waiting');
+});
 
 /** Keep R2 conditional writes observable without contacting Cloudflare. / R2 조건부 쓰기를 오프라인에서 검증합니다. */
 class MemoryBucket {
@@ -35,7 +110,7 @@ function message(overrides = {}) {
 		'To: support@example.com',
 		'Subject: Hello',
 		'Message-ID: <one@example.net>',
-		'Reply-To: attacker@example.org',
+		'Reply-To: sender@example.net',
 		'MIME-Version: 1.0',
 		'Content-Type: text/plain; charset=utf-8',
 		'',
@@ -323,10 +398,10 @@ test('identity conflicts, automated mail and non-allowlisted senders cannot caus
 	const key = `inbound/${emailId}.eml`;
 	env.INBOX.objects.get(key).customMetadata.autoSubmitted = 'auto-replied';
 	await assert.rejects(() => replyToEmail(env, emailId, 'Hello'), /Automated/);
-	assert.equal(env.INBOX.objects.has(`replies/${emailId}.json`), false);
+	assert.equal((await (await env.INBOX.get(`replies/${emailId}.json`)).json()).state, 'sending');
 });
 
-test('reply to the allowlisted author rather than a provider bounce envelope or Reply-To header', async () => {
+test('reply to the message reply address rather than a provider bounce envelope', async () => {
 	const sent = [];
 	const env = {
 		INBOX: new MemoryBucket(),

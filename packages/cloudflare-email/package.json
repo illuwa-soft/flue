@@ -1,6 +1,6 @@
 {
 	"name": "@illuwa-soft/flue-cloudflare-email",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Native Cloudflare email ingress, threaded Flue conversations, and bounded replies.",
 	"type": "module",
 	"license": "Apache-2.0",
@@ -53,7 +53,8 @@
 	},
 	"dependencies": {
 		"html-to-text": "^9.0.5",
-		"postal-mime": "^2.6.0"
+		"postal-mime": "^2.6.0",
+		"valibot": "^1.1.0"
 	},
 	"devDependencies": {
 		"@flue/runtime": "workspace:*",

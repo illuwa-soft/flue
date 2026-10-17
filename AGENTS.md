@@ -55,7 +55,7 @@ pnpm format         # format your work
 ## Community Cloudflare email package
 
 - This fork's maintained default branch is `community`; retain `main` as an upstream reference.
-- The single reusable implementation is `packages/cloudflare-email/src/channel.ts`. Examples import `@illuwa-soft/flue-cloudflare-email`; never restore a copied adapter under the example.
+- The reusable implementation lives only in `packages/cloudflare-email/src/`: `channel.ts` owns factory/hook composition and `messages.ts` owns mail/storage behavior. Examples import `@illuwa-soft/flue-cloudflare-email`; never restore a copied adapter under the example.
 - This community package has focused Node, lifecycle, packed-consumer and workerd tests even though the upstream snapshot omits its test suites. Use its [maintainer runbook](packages/cloudflare-email/MAINTAINING.md).
-- Release only this package through the manual staging workflow. An upstream merge is not authorization to publish, deprecate, delete source or rewrite persisted mail.
+- Release only this package through `cloudflare-email-release.yml`: a stable version bump pushed to `community` runs full verification and publishes using npm OIDC; existing versions are skipped. An upstream merge is not authorization to deprecate, delete source or rewrite persisted mail.
 - Record review and upstream evidence in [lifecycle.json](packages/cloudflare-email/lifecycle.json); follow [MIGRATING.md](packages/cloudflare-email/MIGRATING.md) for a verified successor and removal.

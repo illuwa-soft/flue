@@ -1,4 +1,39 @@
-# Adopt an official successor and retire this package
+# Package migration and eventual official adoption
+
+## Upgrade from 0.1 to 0.2
+
+0.2 changes the public configuration and reply policy. Review before updating
+a live consumer; this is not a transparent patch release.
+
+1. Replace the Env-shaped bindings/admit factory with actual
+   `bindings: { EMAIL, INBOX }`, `mailboxAddress`, and optional `channelId`.
+2. Register `email.handler(Agent)` on the native Worker entrypoint. Consume the
+   same instance with `useCloudflareEmail(email)` in the agent. Remove duplicate
+   model reply tools when adopting the hook.
+3. Move local simulation and any required outbound allowlist into an injected
+   EMAIL sender adapter. The package no longer reads EMAIL_MODE or requires
+   EMAIL_REPLY_ALLOWED_SENDERS. Reply now honors Reply-To; reply-all can send to
+   original To/CC participants. Review the application's intended send scope.
+4. For low-level functions, pass explicit EmailContext (EMAIL, INBOX,
+   mailboxAddress, optional channelId) rather than the old Env-shaped object.
+   Pass custom admission to `receive(message, admit)` at the call site.
+5. Read threadId/owner from each delivery, not useInitialData. The package does
+   not write initialData; initialize a fixed target first if its agent requires
+   creation data. Drain old queued deliveries before changing to the new signal
+   attribute contract. Do not replay settled messages to make new attributes.
+6. Preserve resource identities and all existing R2 keys. conversationId is
+   additive metadata. Existing records/indexes without it retain their original
+   cloudflare-thread target. Known threads do not move merely because channelId
+   changes; explicitly plan a separate migration if moving them is required.
+7. Run tests, a Worker build, and the packed-consumer check against public Flue.
+   Verify both per-thread and fixed routing before deployment.
+
+Rollback requires the old configuration and sender policy as well as the old
+package version. Reconcile pending or uncertain sends before changing versions;
+do not clear reservations or rewrite inbound bytes. New fixed-room conversations
+are not understood as fixed routing by 0.1, so drain them before rollback.
+
+## Adopt an official successor
 
 **Current state: active community maintenance. No successor has been selected.**
 Do not replace this sentence with an assumed `@flue/*` name until a real package

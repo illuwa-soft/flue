@@ -1,23 +1,51 @@
-name: Stage community Cloudflare email release
+name: Publish community Cloudflare email
 
 on:
+  push:
+    branches: [community]
+    paths:
+      - 'packages/cloudflare-email/package.json'
   workflow_dispatch:
     inputs:
       version:
-        description: Exact package.json version to stage (never publishes automatically)
-        required: true
-        default: '0.1.0'
+        description: Optional exact version assertion; published versions are skipped
+        required: false
         type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: cloudflare-email-npm-release
+  cancel-in-progress: false
+
 jobs:
-  verify:
+  preflight:
     if: github.repository == 'illuwa-soft/flue' && github.ref == 'refs/heads/community'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      should_publish: ${{ steps.release.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Decide whether this exact version needs publication
+        id: release
+        run: node packages/cloudflare-email/scripts/release.mjs
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+  verify:
+    needs: preflight
+    if: needs.preflight.outputs.should_publish == 'true'
     uses: ./.github/workflows/cloudflare-email-ci.yml
-  stage:
-    needs: verify
+  publish:
+    needs: [preflight, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -30,6 +58,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
@@ -39,12 +68,16 @@ jobs:
       - run: pnpm exec turbo run build --filter=@illuwa-soft/flue-cloudflare-email...
       - run: pnpm --filter @illuwa-soft/flue-cloudflare-email release:check
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
-      - name: Pack and stage only this verified package
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+      - name: Pack and publish only the verified package using OIDC
         working-directory: packages/cloudflare-email
         run: |
           mkdir -p "$RUNNER_TEMP/cloudflare-email-release"
           pnpm pack --pack-destination "$RUNNER_TEMP/cloudflare-email-release"
-          npm stage publish "$RUNNER_TEMP/cloudflare-email-release/illuwa-soft-flue-cloudflare-email-$RELEASE_VERSION.tgz" --access public
+          npm publish "$RUNNER_TEMP/cloudflare-email-release/illuwa-soft-flue-cloudflare-email-$RELEASE_VERSION.tgz" --access public --provenance --registry=https://registry.npmjs.org --@illuwa-soft:registry=https://registry.npmjs.org
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+      - name: Confirm the public registry version
+        run: npm view "@illuwa-soft/flue-cloudflare-email@$RELEASE_VERSION" version dist.integrity --registry=https://registry.npmjs.org --@illuwa-soft:registry=https://registry.npmjs.org
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}

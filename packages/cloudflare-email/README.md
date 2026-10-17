@@ -1,115 +1,158 @@
 # @illuwa-soft/flue-cloudflare-email
 
-Native Cloudflare email ingress and threaded conversations for Flue.
+Connect native Cloudflare email to an existing Flue agent with one configured
+channel, one Worker handler, and one consumption-only hook.
 
-This is an **independently maintained community package**, not an official Flue
-or Cloudflare integration. It uses public Flue APIs and works with the published
-`@flue/runtime`; consumers do not need this repository's Flue fork.
-
-The implementation lives only in this package. The runnable application in
-[`examples/cloudflare-email`](https://github.com/illuwa-soft/flue/tree/community/examples/cloudflare-email)
-imports it, rather than maintaining a second copy.
+This independently maintained community package works with official
+`@flue/runtime`; a forked Flue runtime is not required. Development requires
+Node >=22.19.0 and a Cloudflare-target Flue application with `nodejs_compat`.
 
 ## Install
 
-In an existing Cloudflare-target Flue application:
+This page documents the **0.2 API**. For testing unpublished source revisions,
+install the local archive produced by `pnpm pack` after building.
 
 ```sh
-pnpm add @illuwa-soft/flue-cloudflare-email @flue/runtime
+pnpm add @illuwa-soft/flue-cloudflare-email@^0.2.0 @flue/runtime@^2.3.0
 ```
 
-Requirements: Node **22.19 or later** for development, a supported Flue 2.x
-runtime (**2.3.0 is the initial verified baseline**), and a Cloudflare Worker
-configured with `nodejs_compat`. This adapter runs on Cloudflare; Node tests do
-not turn it into a Node email server.
+## Minimum connection: three files
 
-## Connect a mailbox to an existing agent
+### 1. Configure a channel
 
-1. Add the following application-owned bindings to your Wrangler configuration.
-   Replace the bucket and mailbox with your own values; create the bucket.
+```ts
+// src/email.ts
+import { env } from 'cloudflare:workers';
+import { createCloudflareEmailChannel } from '@illuwa-soft/flue-cloudflare-email';
 
-   ```jsonc
-   {
-     "r2_buckets": [{ "binding": "INBOX", "bucket_name": "your-email-inbox" }],
-     "send_email": [{ "name": "EMAIL" }],
-     "vars": {
-       "EMAIL_RECIPIENT": "support@example.com",
-       "EMAIL_REPLY_ALLOWED_SENDERS": "operator@example.net",
-       "EMAIL_MODE": "live",
-     },
-   }
-   ```
+export const email = createCloudflareEmailChannel({
+  bindings: { EMAIL: env.EMAIL, INBOX: env.INBOX },
+  mailboxAddress: 'assistant@example.com',
+  channelId: 'personal-assistant',
+});
+```
 
-2. Generate your application's Worker types with `wrangler types`. Import your
-   existing registered Flue agent and compose the handler in `src/cloudflare.ts`:
+- `bindings` contains only the actual sending and storage resources.
+- `mailboxAddress` is this channel's receiving mailbox and outgoing From address.
+- `channelId` selects a fixed conversation **within the handler's agent**. Omit
+  it for a separate conversation per email thread. Ordinary Flue admission creates
+  a missing fixed conversation and preserves an existing one's initial data.
+  Agents with required creation data must have their fixed conversation initialized
+  through the application before the first email arrives.
 
-   ```ts
-   import { env } from 'cloudflare:workers';
-   import { dispatch } from '@flue/runtime';
-   import { createCloudflareEmailChannel } from '@illuwa-soft/flue-cloudflare-email';
-   import { EmailAssistant } from './agents/email-assistant.ts';
+The application owns settings storage and loading. There is no required `Env`
+shape, environment-variable naming convention, `mode`, or recipient allowlist.
 
-   const channel = createCloudflareEmailChannel({
-     bindings: env,
-     admit: dispatch.bind(null, EmailAssistant),
-   });
+### 2. Consume it in the agent
 
-   export default { email: channel.email };
-   ```
+```ts
+// src/agents/assistant.ts
+'use agent';
 
-   Merge this handler with any existing `scheduled`, `queue` or other non-HTTP
-   handlers. Keep HTTP routes in `app.ts`. No webhook URL or signing secret is
-   required. The factory does not register an agent or modify migrations.
+import { useModel } from '@flue/runtime';
+import { useCloudflareEmail } from '@illuwa-soft/flue-cloudflare-email';
+import { email } from '../email.ts';
 
-3. Build and deploy the application. In Cloudflare Email Routing, route the exact
-   `EMAIL_RECIPIENT` address to this Worker. Back up an existing rule before
-   changing it. For arbitrary-recipient asynchronous replies, onboard the
-   sending domain and use a plan that supports Cloudflare Email Sending
-   (currently beta, Workers Paid).
+/** Read and answer delivered mail. / 전달된 이메일을 읽고 답장합니다. */
+export function Assistant() {
+  useModel('cloudflare/@cf/moonshotai/kimi-k2.6');
+  useCloudflareEmail(email);
+  return 'Read the email and reply helpfully in the sender’s language.';
+}
+```
 
-4. Configure your agent for these inputs:
+Keep your existing model and business tools. The hook registers `read_email`
+and `reply_email` for matching email deliveries and adds a usage instruction.
+It does not change routing, register an agent, select a model, replace creation
+data, or create an approval workflow. Non-email deliveries register no email
+tools. Plain assistant output is not automatically sent as email.
 
-   - Creation data: `{ threadId, owner }`.
-   - Delivery: `kind: 'signal'`, type `cloudflare.email.received`.
-   - Delivery attributes: `emailId`, `threadId`, `from` (SMTP envelope), `to`.
-   - Conversation id: `cloudflare-thread:<threadId>`.
+### 3. Connect native ingress
 
-   Read the **current delivery's** `emailId` through Flue's `useDelivery()`.
-   Retrieve it with `retrieveThreadEmail(bindings, threadId, owner, emailId)`.
-   Do not bind retrieval to the first message forever. See the complete
-   conversational agent in the example for narrow retrieval and reply tools.
+```ts
+// src/cloudflare.ts
+import { Assistant } from './agents/assistant.ts';
+import { email } from './email.ts';
 
-## What the adapter does
+export default { email: email.handler(Assistant) };
+```
 
-- Stores at most **1 MiB** of immutable source mail before durable admission.
-- Uses a stable, envelope-scoped message identity as the dispatch idempotency key.
-- Indexes incoming and sent Message-IDs. Known `In-Reply-To` / `References`
-  continue the original author's conversation; subjects do not select a thread.
-- Rejects another participant or conflicting known-thread references. It checks
-  at most **100 combined message references**.
-- Parses MIME and HTML-only bodies. Quoted HTML remains quoted. Retrieval text
-  is limited to **16,000 characters**; attachment contents are not exposed.
-- Replies only to an explicitly allowlisted MIME From author, not `Reply-To` or
-  a model-selected recipient. SMTP envelope senders can be bounce addresses.
-- Reserves one outgoing reply per incoming mail with a conditional write.
+Merge the email property with existing Worker handlers. HTTP routes stay in
+`app.ts`. No HTTP webhook or signing secret is needed. The handler resolves after
+Flue durably admits the mail, not after the model replies.
 
-`EMAIL_REPLY_ALLOWED_SENDERS` is a comma-separated list; empty disables replies.
-It is **not sender authentication**. The native email event, thread references
-and a digest id do not prove the sender's identity. Use an authorization policy
-appropriate to the actions your agent can perform.
+Configure resources in Wrangler, generate types, and route the exact mailbox
+to the deployed Worker with Cloudflare Email Routing:
 
-An interrupted send or result write leaves the reply reserved as `sending`.
-Reconcile provider delivery before clearing it. This adapter does not claim an
-atomic R2/email transaction or exactly-once external delivery.
+```jsonc
+{
+  "r2_buckets": [{ "binding": "INBOX", "bucket_name": "your-email-inbox" }],
+  "send_email": [{ "name": "EMAIL" }],
+}
+```
 
-## Conversation and HITL example
+```sh
+pnpm exec wrangler types
+```
 
-The example adds ordinary conversation, persisted human approval, cancellation,
-revision, a local faux model and administrative legacy import. These are
-**application policies**, not implicit features enabled by installing a package.
-Only the application can authorize and execute a domain action.
+Create the bucket and onboard the sending domain using a supported Cloudflare
+Email Sending plan. Cloudflare's sending permissions still apply. Changing
+DNS, routing, resources, or deployment is a separate operator action.
 
-From a checkout of the `community` branch:
+## Model tools
+
+1. `read_email()` returns bounded mail, thread/conversation identity, attachment
+   metadata, and `messageRef`.
+2. `reply_email({ messageRef, text, replyAll? })` replies to that delivery.
+
+A reference from another delivery fails explicitly instead of targeting the
+latest mail by accident. Reread after the delivery cursor advances. Captured
+tools stay bound to a durable delivery snapshot, not a mutable latest-mail
+pointer. A reference is not an authorization capability.
+
+Normal reply uses original `Reply-To`, falling back to `From`. `replyAll: true`
+also adds original To/CC participants as CC, excluding self and case-insensitive
+duplicates. It never copies BCC or accepts arbitrary model-selected recipients.
+Application-specific outbound restrictions belong in the supplied sender adapter.
+
+## Fixed conversations and independent instances
+
+In fixed mode, independent mail threads share conversation memory but retain
+separate threadId, emailId, reply reservations, and application-owned approval
+state. Only combine participants whose information may be shared.
+
+Create separate instances for other mailboxes or routing settings. Instances
+can share resources; constructing one does not provision a mailbox or R2. A
+Worker receiving several mailboxes must select one handler by exact envelope
+recipient, never broadcast to all handlers. Hook tool names are fixed; configure
+only one matching instance per mailbox in an agent.
+
+Persisted routing keeps redeliveries and known-thread replies on their original
+destination after configuration changes. Pre-0.2 threads retain their original
+`cloudflare-thread:<threadId>` destination. No automatic movement or replay occurs.
+
+## Storage and delivery guarantees
+
+- Store at most **1 MiB** of immutable raw mail before admission.
+- Stable envelope-scoped message identities deduplicate redelivery.
+- Known `In-Reply-To`/`References` continue a thread only for its original author;
+  subjects never select a thread. Reply-all does not enable multi-party thread
+  continuation. At most **100 combined references** are checked.
+- Retrieval contains at most **16,000 characters** and attachment metadata only.
+  HTML quotes remain quoted.
+- Automated/list messages cannot receive automatic replies. One outgoing reply
+  is reserved per incoming mail. Interrupted sends remain uncertain and require
+  reconciliation; R2 and email are not an atomic transaction.
+
+Headers and thread ids do not authenticate people or authorize actions. Domain
+authorization and human approval belong to the application.
+
+## Local demo and optional HITL recipe
+
+The [runnable example](https://github.com/illuwa-soft/flue/tree/community/examples/cloudflare-email)
+adds document approval, cancellation, revision, and explicit legacy history import.
+These are optional policies, not required setup. Its injected local sender records
+mail in R2 without calling the real email service.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -118,36 +161,30 @@ pnpm --filter cloudflare-email-example cf-typegen
 pnpm --filter cloudflare-email-example dev:local
 ```
 
-In another terminal at the repository root:
+In another terminal:
 
 ```sh
-pnpm --filter cloudflare-email-example email:local --text "Create a document for approval."
-pnpm --filter cloudflare-email-example email:local --reply latest --text "approve CODE"
+pnpm --filter cloudflare-email-example email:local --text "Hello"
+pnpm --filter cloudflare-email-example outbox:local
 ```
 
-Replace `CODE` with the code printed in the simulated reply. Local mode uses
-the actual built Worker and Flue Durable Object, but never calls a model or
-email service. The example README describes restart, revision and cancellation.
+The packed-consumer check also builds a hook-only agent against public Flue and
+tests two independent authors in a fixed room, restart, and replay:
 
-## Independent releases and eventual upstream adoption
+```sh
+pnpm --filter @illuwa-soft/flue-cloudflare-email test:consumer
+```
 
-This package has its own version and release workflow. Upstream review is not a
-prerequisite for fixes or releases. Weekly compatibility and upstream-status
-checks are configured on the fork's default `community` branch; an owned
-maintenance issue records actionable failures and review reminders.
-
-**A merged PR alone does not retire this package.** Retirement requires a
-published, verified successor, a migration guide and an explicit maintainer
-decision. Existing published versions remain downloadable after deprecation.
-No workflow automatically deletes source, unpublishes versions, replaces live
-bindings, or redirects consumers to an unverified package.
+## References
 
 - [API and storage contract](./API.md)
 - [Maintainer and release runbook](./MAINTAINING.md)
-- [Migration and removal runbook](./MIGRATING.md)
+- [0.1 and official-successor migration](./MIGRATING.md)
 - [Upstream discussion](https://github.com/withastro/flue/discussions/864)
 
-## License
-
-Apache-2.0. Retain the included LICENSE and NOTICE when redistributing derived
-code. Flue and Cloudflare names identify compatibility, not endorsement.
+This package has its own release lane and weekly compatibility/upstream checks.
+Stable package version bumps pushed to `community` run full verification and
+publish to npm through Trusted Publishing. Already-published versions are skipped.
+An upstream merge alone never triggers deprecation, deletion, or unpublishing.
+License: Apache-2.0; retain LICENSE and NOTICE. Compatibility does not imply
+Flue or Cloudflare endorsement.

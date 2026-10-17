@@ -135,6 +135,17 @@ async function verify() {
 	await run(process.execPath, ['--test', 'test/email.test.mjs'], options);
 	await run('npm', ['exec', '--', 'vite', 'build', '--logLevel', 'warn'], options);
 	await run(process.execPath, ['--test', 'test/worker.test.mjs'], options);
+	await cp(
+		path.join(consumer, 'test/fixtures/minimal-agent.ts.txt'),
+		path.join(consumer, 'src/agents/email-assistant.ts'),
+	);
+	await writeFile(
+		path.join(consumer, 'src/email-channel.ts'),
+		"import { env } from 'cloudflare:workers';\nimport { createEmailChannel } from './email.ts';\nexport const email = createEmailChannel(env, 'personal-assistant');\n",
+	);
+	await run('npm', ['exec', '--', 'tsc', '--noEmit'], options);
+	await run('npm', ['exec', '--', 'vite', 'build', '--logLevel', 'warn'], options);
+	await run(process.execPath, ['--test', 'test/minimal-worker.test.mjs'], options);
 	console.log(
 		JSON.stringify({
 			status: 'passed',
@@ -142,6 +153,7 @@ async function verify() {
 			flue: installed.version,
 			isolated: true,
 			worker: 'full conversational/HITL flow',
+			minimal: 'hook-only fixed-room delivery, two authors, restart and replay',
 		}),
 	);
 }

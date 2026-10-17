@@ -2,7 +2,7 @@ import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@ear
 import { setProvider } from '@flue/runtime';
 
 /** Use Flue's existing faux-provider mechanism to exercise real tool turns with zero network calls. / 네트워크 없이 실제 도구 턴을 실행하도록 기존 faux provider를 사용합니다. */
-export function installLocalModel() {
+export function installLocalModel(minimal = false) {
 	const faux = fauxProvider({
 		api: 'email-local',
 		provider: 'email-local',
@@ -11,6 +11,24 @@ export function installLocalModel() {
 	const respond: Parameters<typeof faux.setResponses>[0][number] = (context) => {
 		faux.appendResponses([respond]);
 		const latest = context.messages.at(-1);
+		if (latest?.role === 'toolResult' && latest.toolName === 'read_email') {
+			const read = JSON.parse(
+				latest.content
+					.filter((part) => part.type === 'text')
+					.map((part) => part.text)
+					.join(''),
+			) as { messageRef: string; text: string };
+			return fauxAssistantMessage(
+				fauxToolCall('reply_email', {
+					messageRef: read.messageRef,
+					text: `Minimal reply: ${read.text}`,
+				}),
+				{ stopReason: 'toolUse' },
+			);
+		}
+		if (minimal) {
+			return fauxAssistantMessage(fauxToolCall('read_email', {}), { stopReason: 'toolUse' });
+		}
 		if (latest?.role !== 'toolResult' || latest.toolName !== 'retrieve_cloudflare_email') {
 			return fauxAssistantMessage(fauxToolCall('retrieve_cloudflare_email', {}), {
 				stopReason: 'toolUse',
@@ -22,6 +40,7 @@ export function installLocalModel() {
 			.join('');
 		const result = JSON.parse(payload) as {
 			email: { text: string };
+			messageRef: string;
 			hitl: { phase: string; feedback: string };
 			replySent: boolean;
 			priorEmails: { text: string }[];
@@ -52,7 +71,10 @@ export function installLocalModel() {
 			.join('\n')
 			.slice(-4000);
 		return fauxAssistantMessage(
-			fauxToolCall('reply_to_cloudflare_email', { text: `로컬 대화 기록:\n${text}` }),
+			fauxToolCall('reply_email', {
+				messageRef: result.messageRef,
+				text: `로컬 대화 기록:\n${text}`,
+			}),
 			{ stopReason: 'toolUse' },
 		);
 	};

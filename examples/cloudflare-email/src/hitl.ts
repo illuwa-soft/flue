@@ -1,4 +1,5 @@
 import { replyToEmail, retrieveThreadEmail } from '@illuwa-soft/flue-cloudflare-email';
+import { emailContext } from './email.ts';
 
 export type Plan = { title: string; content: string };
 type Approval = { id: string; toolCallId: string; token: string; plan: Plan; expiresAt: number };
@@ -98,7 +99,7 @@ export async function proposeApproval(
 	toolCallId: string,
 	now = Date.now(),
 ) {
-	await retrieveThreadEmail(env, threadId, owner, emailId);
+	await retrieveThreadEmail(emailContext(env), threadId, owner, emailId);
 	if (
 		!plan.title.trim() ||
 		!plan.content.trim() ||
@@ -109,7 +110,7 @@ export async function proposeApproval(
 	const current = await snapshot(env, threadId);
 	let state = current.state;
 	if (state.phase === 'waiting' && state.pending?.toolCallId === toolCallId) {
-		await replyToEmail(env, emailId, approvalText(state));
+		await replyToEmail(emailContext(env), emailId, approvalText(state));
 		return state;
 	}
 	if (state.phase !== 'drafting') throw new Error('A plan can only be proposed while drafting.');
@@ -126,7 +127,7 @@ export async function proposeApproval(
 		},
 	};
 	await save(env, threadId, state, current.etag);
-	await replyToEmail(env, emailId, approvalText(state));
+	await replyToEmail(emailContext(env), emailId, approvalText(state));
 	return state;
 }
 
@@ -148,7 +149,7 @@ async function finishExecution(
 	const completed: HitlState = { ...state, phase: 'completed', artifactKey, lastEmailId: emailId };
 	await save(env, threadId, completed, etag);
 	await replyToEmail(
-		env,
+		emailContext(env),
 		emailId,
 		`승인된 문서를 저장했습니다.\n\n${pending.plan.title}\n\n${pending.plan.content}\n\n아티팩트: ${artifactKey}`,
 	);
@@ -163,14 +164,14 @@ export async function handleHumanReply(
 	emailId: string,
 	now = Date.now(),
 ) {
-	const email = await retrieveThreadEmail(env, threadId, owner, emailId);
+	const email = await retrieveThreadEmail(emailContext(env), threadId, owner, emailId);
 	const current = await snapshot(env, threadId);
 	const state = current.state;
 	if (state.lastEmailId === emailId && state.phase === 'executing') {
 		return finishExecution(env, threadId, emailId, state, current.etag);
 	}
 	if (state.lastEmailId === emailId && state.phase === 'completed') {
-		await replyToEmail(env, emailId, '이미 완료된 승인입니다.');
+		await replyToEmail(emailContext(env), emailId, '이미 완료된 승인입니다.');
 		return state;
 	}
 	if (state.lastEmailId === emailId && state.phase === 'drafting') return state;
@@ -178,7 +179,7 @@ export async function handleHumanReply(
 	const command = parseDecision(email.text);
 	if (state.phase !== 'waiting' || !state.pending) {
 		if (command || decisionAttempt(email.text) || state.phase === 'executing') {
-			await replyToEmail(env, emailId, '현재 처리할 수 있는 승인 요청이 없습니다.');
+			await replyToEmail(emailContext(env), emailId, '현재 처리할 수 있는 승인 요청이 없습니다.');
 			return state;
 		}
 		const drafting: HitlState = {
@@ -192,12 +193,20 @@ export async function handleHumanReply(
 	if (now > state.pending.expiresAt) {
 		const expired: HitlState = { ...state, phase: 'expired', lastEmailId: emailId };
 		await save(env, threadId, expired, current.etag);
-		await replyToEmail(env, emailId, '승인 요청이 만료되었습니다. 새 요청을 보내 주세요.');
+		await replyToEmail(
+			emailContext(env),
+			emailId,
+			'승인 요청이 만료되었습니다. 새 요청을 보내 주세요.',
+		);
 		return expired;
 	}
 	if (!command && !decisionAttempt(email.text)) return state;
 	if (!command || command.token !== state.pending.token) {
-		await replyToEmail(env, emailId, `유효한 새 승인 명령이 없습니다.\n\n${approvalText(state)}`);
+		await replyToEmail(
+			emailContext(env),
+			emailId,
+			`유효한 새 승인 명령이 없습니다.\n\n${approvalText(state)}`,
+		);
 		return state;
 	}
 	if (command.action === 'revise') {
@@ -213,7 +222,11 @@ export async function handleHumanReply(
 	if (command.action === 'cancel') {
 		const cancelled: HitlState = { ...state, phase: 'cancelled', lastEmailId: emailId };
 		await save(env, threadId, cancelled, current.etag);
-		await replyToEmail(env, emailId, '작업을 취소했습니다. 문서는 저장하지 않았습니다.');
+		await replyToEmail(
+			emailContext(env),
+			emailId,
+			'작업을 취소했습니다. 문서는 저장하지 않았습니다.',
+		);
 		return cancelled;
 	}
 	const executing: HitlState = { ...state, phase: 'executing', lastEmailId: emailId };

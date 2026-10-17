@@ -4,6 +4,7 @@ import { retrieveEmail } from '@illuwa-soft/flue-cloudflare-email';
 import { Hono } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { EmailAssistant } from './agents/email-assistant.ts';
+import { emailContext } from './email.ts';
 import { importLegacyThread } from './history.ts';
 import { readHitlState } from './hitl.ts';
 
@@ -86,7 +87,7 @@ app.get('/api/emails/:id', async (c) => {
 	const receipt = await env.INBOX.get(`receipts/${emailId}.json`);
 	const reply = await env.INBOX.get(`replies/${emailId}.json`);
 	return c.json({
-		email: await retrieveEmail(env, emailId),
+		email: await retrieveEmail(emailContext(env), emailId),
 		receipt: await receipt?.json(),
 		reply: await reply?.json(),
 	});

@@ -1275,6 +1275,9 @@ importers:
       postal-mime:
         specifier: ^2.6.0
         version: 2.7.5
+      valibot:
+        specifier: ^1.1.0
+        version: 1.4.2(typescript@7.0.2)
     devDependencies:
       '@flue/runtime':
         specifier: workspace:*

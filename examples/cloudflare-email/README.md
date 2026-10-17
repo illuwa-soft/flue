@@ -10,6 +10,14 @@ The email adapter is imported from `@illuwa-soft/flue-cloudflare-email`.
 Its only implementation lives in `packages/cloudflare-email`; this example
 owns the agent, local model, HITL action and legacy-administration policy.
 
+For a minimal integration without HITL or history import, use the package's
+[three-file quickstart](../../packages/cloudflare-email/README.md#minimum-connection-three-files).
+The channel owns mailboxAddress and optional channelId; handler(agent) admits
+mail and useCloudflareEmail(channel) only registers delivery-scoped tools.
+This example injects local sending and a demo-specific live allowlist from
+src/email.ts. Those environment variables are application settings, not the
+package binding contract. src/email-channel.ts exports the shared instance.
+
 ```text
 email() → immutable R2 source → thread lookup → dispatch(EmailAssistant)
   → draft exact document → email approval request → idle

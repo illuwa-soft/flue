@@ -1,76 +1,96 @@
-# API reference
+# API reference — 0.2
 
-All exports come from `@illuwa-soft/flue-cloudflare-email`. ESM and TypeScript
-declarations are included in the npm tarball. There are no deep/internal import
-paths and no runtime import of `cloudflare:workers`.
+Import ESM functions and TypeScript types from `@illuwa-soft/flue-cloudflare-email`.
+There are no deep imports or runtime imports of `cloudflare:workers`.
 
-## Types
+## Configuration
 
-| Export          | Contract                                                                                   |
-| --------------- | ------------------------------------------------------------------------------------------ |
-| `IncomingEmail` | The native message's `from`, `to`, `headers.get`, `raw`, `rawSize`, and `setReject`.       |
-| `EmailStore`    | The R2 `get`/conditional `put` subset used by this adapter.                                |
-| `OutgoingEmail` | Bound `from`, `to`, `subject`, `text`, and string headers.                                 |
-| `EmailBindings` | `INBOX`, `EMAIL`, `EMAIL_RECIPIENT`, `EMAIL_REPLY_ALLOWED_SENDERS`, optional `EMAIL_MODE`. |
-| `AdmitEmail`    | A callback accepting Flue `AgentDispatchRequest` and returning `DispatchReceipt`.          |
+`createCloudflareEmailChannel(options)` accepts `CloudflareEmailOptions`:
 
-These are structural library contracts, not aliases of a consumer's generated
-`Env`. Typecheck the actual native bindings in each consuming Worker.
+| Option           | Contract                                                                    |
+| ---------------- | --------------------------------------------------------------------------- |
+| `bindings.EMAIL` | Native-compatible send(OutgoingEmail): Promise<{ messageId: string }>       |
+| `bindings.INBOX` | R2-compatible get and conditional put subset (EmailStore)                   |
+| `mailboxAddress` | Required receiving mailbox and outgoing From address                        |
+| `channelId`      | Optional non-empty Flue instance id; omitted means per-thread conversations |
 
-## Factory
+EmailBindings contains only EMAIL and INBOX. Application-generated Env types
+remain in the app. Invalid addresses and empty channel ids fail at construction.
+Instances capture configuration without a mutable shared admission callback.
 
-`createCloudflareEmailChannel({ bindings, admit })` captures the application-owned
-bindings and admission callback. Its methods do not depend on `this`:
+## Channel instance
 
-| Method                 | Result                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------ |
-| `email(message)`       | Native Worker handler, resolves `void` after admission.                              |
-| `receive(message)`     | Resolves `{ emailId, threadId, receipt }`, or `undefined` for a permanent rejection. |
-| `retrieve(emailId)`    | Bounded parsed email and attachment metadata.                                        |
-| `reply(emailId, text)` | Bound send result; a prior successful send returns `deduplicated: true`.             |
+| Member                                 | Contract                                                                                          |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| mailboxAddress, channelId              | Read-only configured values                                                                       |
+| handler(agent)                         | Native handler for a registered Flue agent; resolves void after admission                         |
+| receive(message, admit)                | Explicit admission; returns emailId, threadId, conversationId, receipt, or undefined on rejection |
+| retrieve(emailId)                      | Bounded mail in this mailbox; rejects cross-mailbox access                                        |
+| reply(emailId, text, replyAll = false) | Header-selected recipients; one reservation per mail                                              |
+| tools(delivery)                        | Advanced delivery-scoped Flue tool definitions; empty for unrelated input                         |
 
-The caller supplies the agent registration, model and tools. The factory does
-not manage Cloudflare accounts, DNS, resource creation, user identity, retention
-or workflow approval.
+`useCloudflareEmail(channel)` registers the tools and a usage instruction during
+agent render. It accepts no overrides and owns neither model selection nor
+application approval. Use only one matching channel per mailbox in an agent.
 
-## Functional composition
+## Model tools
 
-The same implementation is available without a factory:
+| Tool        | Input and result                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| read_email  | No arguments; bounded email plus messageRef                                                             |
+| reply_email | messageRef, text (1–16,000 characters), optional replyAll (false); send result and response termination |
 
-- `receiveEmail(message, bindings, admit)`.
-- `retrieveEmail(bindings, emailId)`.
-- `retrieveThreadEmail(bindings, threadId, owner, emailId)` — also verifies this
-  mail belongs to the specified thread and author.
-- `replyToEmail(bindings, emailId, text)`.
-- `readableEmailText({ text?, html? })` — plain text takes precedence; HTML uses
-  a parser with quoted-block preservation.
-- `indexThreadMessage(bindings, messageId, threadId, owner)` — advanced,
-  application-owned migration support; ids are not authorization capabilities.
+Tools verify stored mailbox, thread, author, and conversation against their
+delivery snapshot. A stale messageRef fails before reservation or sending. When
+Flue's cursor advances, reread and use the new delivery's reference. Captured
+tools never silently retarget to another mail.
 
-Never expose arbitrary storage identifiers or the indexing helper as a public,
-unauthenticated HTTP tool.
+Reply uses original Reply-To or falls back to From. Reply-all adds original To/CC
+as CC, removing self and duplicates. BCC is never copied. OutgoingEmail contains
+to (string or string array), optional cc (string array), from, subject, text, and
+threading headers. The model cannot select arbitrary recipients. The package
+requires no allowlist; consumer sender adapters can enforce application policy.
 
-## Persisted format (0.1.x)
+## Delivery contract
 
-| Key prefix                    | Contents                                                      |
-| ----------------------------- | ------------------------------------------------------------- |
-| `inbound/<emailId>.eml`       | Immutable RFC email bytes and envelope/thread metadata.       |
-| `message-index/<digest>.json` | Mailbox-scoped Message-ID → thread and owner.                 |
-| `receipts/<emailId>.json`     | Admission receipt and thread id.                              |
-| `replies/<emailId>.json`      | `sending` reservation or `sent` provider message id.          |
-| `outbox/...json`              | Local-mode simulated sends only.                              |
-| `legacy-links/<emailId>.json` | Optional application migration association read by retrieval. |
+Ingress emits a signal of type `cloudflare.email.received`, with string attributes
+emailId, threadId, owner (MIME From), conversationId, from (SMTP envelope), and to
+(mailbox). Headers are not authenticated identities.
 
-Message identity hashes the SMTP envelope sender, recipient and Message-ID,
-falling back to the raw digest. A conflicting source under that same identity
-is rejected. This is not a provider-issued delivery id or a claim of universal
-SMTP retry equivalence.
+Ingress does not set initialData. Existing seeds remain unchanged. If the agent
+requires creation data, initialize its fixed conversation through the app first.
+Otherwise ordinary Flue admission creates/continues the target.
 
-Unknown references create a new thread. Different known threads in one message
-or a different MIME From author on a known thread are rejected. The receiving
-mailbox scopes all reference indexes. A fresh subject alone never joins a thread.
+Destination snapshots persist with inbound metadata and reference indexes.
+Retries and known replies retain their original destination after configuration
+changes. Unknown references start a new thread. Original-author checks remain;
+reply-all does not grant multi-party thread or approval membership.
 
-The example's `hitl/`, `artifacts/` and `thread-history/` records are owned by the
-example, not the package. Do not delete or rewrite storage just because the
-implementation package changes. SemVer and migration notes must describe any
-future persisted-format change.
+## Low-level functions
+
+EmailContext explicitly contains INBOX, EMAIL, mailboxAddress, and optional
+channelId. It is not an Env alias. These primitives share the factory's implementation:
+
+- receiveEmail(message, context, admit).
+- retrieveEmail(context, emailId).
+- retrieveThreadEmail(context, threadId, owner, emailId).
+- replyToEmail(context, emailId, text, replyAll?).
+- indexThreadMessage(context, messageId, threadId, owner, conversationId?).
+- readableEmailText({ text?, html? }).
+
+Callers own authentication when exposing advanced primitives. Use the hook for
+model access instead of exposing arbitrary storage ids.
+
+## Persisted format
+
+| Prefix                      | Contents                                                                  |
+| --------------------------- | ------------------------------------------------------------------------- |
+| inbound/<emailId>.eml       | Immutable RFC bytes; envelope/thread metadata and additive conversationId |
+| message-index/<digest>.json | Mailbox-scoped Message-ID → thread, owner, additive conversationId        |
+| receipts/<emailId>.json     | Dispatch receipt, threadId, conversationId                                |
+| replies/<emailId>.json      | Sending reservation or sent provider message id                           |
+| legacy-links/<emailId>.json | Optional application migration link                                       |
+
+Missing conversationId means the original `cloudflare-thread:<threadId>` target.
+Hashes and key prefixes are unchanged. No automatic rewrite, replay, or deletion
+occurs. Local outbox, HITL, artifacts, and imported history belong to the example.

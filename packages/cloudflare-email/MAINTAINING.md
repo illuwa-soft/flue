@@ -6,7 +6,7 @@ commands to release this one integration.
 
 ## Ownership and reminders
 
-- Implementation: `packages/cloudflare-email/src/channel.ts` only.
+- Implementation: `packages/cloudflare-email/src/` only (channel composition and mail primitives).
 - Consumer policy/example: `examples/cloudflare-email` imports the package.
 - Review checkpoint: `packages/cloudflare-email/lifecycle.json`.
 - Upstream request: [Discussion #864](https://github.com/withastro/flue/discussions/864).
@@ -90,33 +90,48 @@ repository or an npm organization does not authenticate this workstation.
 3. Stage the resulting tarball, review it, and approve with the owner's 2FA:
 
    ```sh
-   npm stage publish /absolute/path/to/release/illuwa-soft-flue-cloudflare-email-0.1.0.tgz --access public
+   npm stage publish /absolute/path/to/release/illuwa-soft-flue-cloudflare-email-0.2.0.tgz --access public --registry=https://registry.npmjs.org --@illuwa-soft:registry=https://registry.npmjs.org
    npm stage list @illuwa-soft/flue-cloudflare-email
    npm stage approve STAGE_ID
-   npm view @illuwa-soft/flue-cloudflare-email@0.1.0 version dist.integrity
+   npm view @illuwa-soft/flue-cloudflare-email@0.2.0 version dist.integrity --registry=https://registry.npmjs.org --@illuwa-soft:registry=https://registry.npmjs.org
    ```
 
    Use the tarball filename printed by `pack`. A staged candidate is **not a
    published package**. If staging/approval has an uncertain outcome, inspect
    stages and registry state before retrying. Never republish the same version.
 
-## Subsequent releases from GitHub Actions
+## Automatic releases from GitHub Actions
 
 Configure npm Trusted Publishing for this package and the exact repository
 `illuwa-soft/flue`, workflow `cloudflare-email-release.yml`. Use a GitHub-hosted
 runner, Node >=22.14 and npm >=11.5.1 (the workflow pins a tested newer CLI).
 The package's repository URL must match the fork, not `withastro/flue`.
 
-Select stage-only permission when you want owner review for every release.
-The release workflow is **manual**, runs verification before staging, and does
-not publish on a branch push or deploy the example Worker. OIDC removes the need
-for a long-lived npm token or a separate bot npm account. Approving a stage
-still requires human presence; OIDC is not an approval credential.
+The configured publisher must allow **npm publish**, not only staging. An owner
+can establish that relationship with interactive npm 2FA:
 
-After staging, approve the candidate on npm, verify the public version, and
-record the version/tag and release notes. GitHub OIDC configuration may need
-renewal if its first successful publish does not occur within npm's current
-validation window; see the [live trusted-publisher guide](https://docs.npmjs.com/trusted-publishers).
+```sh
+npm trust github @illuwa-soft/flue-cloudflare-email --file cloudflare-email-release.yml --repository illuwa-soft/flue --allow-publish --yes --registry=https://registry.npmjs.org
+```
+
+Update the package's stable SemVer and changelog, then push to `community`.
+Changes to `packages/cloudflare-email/package.json` trigger the release lane.
+It checks registry metadata, runs the complete compatibility matrix, packs only
+this package, publishes through OIDC, and reads back its version and integrity.
+Ordinary source changes without a version bump are checks, not a new npm release.
+An already-published version skips the release; registry outages fail rather than
+being classified as an unpublished version. The lane rejects a latest downgrade
+and serializes publishing runs. It never deploys the example Worker.
+
+To retry after resolving authentication or CI failure, dispatch
+`cloudflare-email-release.yml` on `community`; optional version input asserts the
+checkout version. Inspect registry and workflow state before retrying an
+uncertain publish. Published versions are immutable and must not be republished.
+
+OIDC uses no stored npm write token. Public source and package support provenance.
+The first successful publish must occur within **2 days** of registering the
+trusted publisher; otherwise recreate that relationship. See the
+[live trusted-publisher guide](https://docs.npmjs.com/trusted-publishers).
 
 ## If upstream does not merge
 

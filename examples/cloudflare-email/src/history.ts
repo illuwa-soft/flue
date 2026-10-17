@@ -1,5 +1,6 @@
 import { indexThreadMessage, readableEmailText } from '@illuwa-soft/flue-cloudflare-email';
 import PostalMime from 'postal-mime';
+import { emailContext } from './email.ts';
 
 type PriorMail = { emailId: string; subject: string; text: string; receivedAt: string };
 type History = { owner: string; emailIds: string[]; messages: PriorMail[] };
@@ -95,7 +96,8 @@ export async function importLegacyThread(env: Env, rootEmailId: string, emailIds
 	if (connected.size !== records.length)
 		throw new Error('Legacy messages are not a connected reference chain.');
 	for (const mail of records) {
-		for (const id of mail.ids) await indexThreadMessage(env, id, rootEmailId, root.owner);
+		for (const id of mail.ids)
+			await indexThreadMessage(emailContext(env), id, rootEmailId, root.owner);
 		const key = `legacy-links/${mail.emailId}.json`;
 		const value = { threadId: rootEmailId, owner: root.owner };
 		const written = await env.INBOX.put(key, JSON.stringify(value), {
