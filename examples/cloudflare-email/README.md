@@ -6,6 +6,10 @@ messages retain their own retrieval target and delivery/reply idempotency keys.
 Ordinary questions receive ordinary replies using that conversation's history.
 Only requested document artifacts enter the human-approval flow.
 
+The email adapter is imported from `@illuwa-soft/flue-cloudflare-email`.
+Its only implementation lives in `packages/cloudflare-email`; this example
+owns the agent, local model, HITL action and legacy-administration policy.
+
 ```text
 email() → immutable R2 source → thread lookup → dispatch(EmailAssistant)
   → draft exact document → email approval request → idle
@@ -18,7 +22,7 @@ Run from the repository root (Node >=22.19.0, pnpm 11):
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm exec turbo run build --filter=@flue/cli...
+pnpm exec turbo run build --filter=cloudflare-email-example... --filter=@flue/cli...
 pnpm --filter cloudflare-email-example cf-typegen
 pnpm --filter cloudflare-email-example dev:local
 ```

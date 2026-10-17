@@ -4,9 +4,8 @@ import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 const example = path.join(root, 'examples/cloudflare-email');
-const baseline = '0d358e7492cdc7aed79b57a3e751d6c96ef4cfac';
+const baseline = '90f3b6c27eeaef217bd59883e58bdd822d4398f8';
 const files = [
-	'src/channels/email.ts',
 	'src/history.ts',
 	'src/hitl.ts',
 	'src/local-model.ts',
@@ -33,14 +32,19 @@ function diff(file, before, after) {
 	const oldLines = before.trimEnd().split('\n');
 	if (!before) oldLines.length = 0;
 	const newLines = after.trimEnd().split('\n');
+	if (!after) newLines.length = 0;
 	let from = `a/${file}`;
 	if (!before) from = '/dev/null';
+	let to = `b/${file}`;
+	if (!after) to = '/dev/null';
 	let oldStart = 1;
 	if (!before) oldStart = 0;
+	let newStart = 1;
+	if (!after) newStart = 0;
 	return [
 		`--- ${from}`,
-		`+++ b/${file}`,
-		`@@ -${oldStart},${oldLines.length} +1,${newLines.length} @@`,
+		`+++ ${to}`,
+		`@@ -${oldStart},${oldLines.length} +${newStart},${newLines.length} @@`,
 		...oldLines.map((line) => `-${line}`),
 		...newLines.map((line) => `+${line}`),
 	].join('\n');
@@ -53,8 +57,25 @@ for (const file of files) {
 	modules += `\n### ${file}\n\n\`\`\`ts\n${source.trimEnd()}\n\`\`\`\n`;
 	changes.push(diff(file, previous(file), source));
 }
+changes.push(diff('src/channels/email.ts', previous('src/channels/email.ts'), ''));
 const oldPackage = JSON.parse(previous('package.json'));
 const newPackage = JSON.parse(await readFile(path.join(example, 'package.json'), 'utf8'));
+
+/** Keep published consumer instructions independent of workspace protocols. */
+function publicDependencies(dependencies) {
+	const versions = {
+		'@flue/runtime': '^2.3.0',
+		'@flue/vite': '^2.3.0',
+		'@illuwa-soft/flue-cloudflare-email': '^0.1.0',
+	};
+	return Object.fromEntries(
+		Object.entries(dependencies).map(([name, specifier]) => {
+			if (!specifier.startsWith('workspace:')) return [name, specifier];
+			if (!versions[name]) throw new Error(`Unmapped workspace dependency: ${name}`);
+			return [name, versions[name]];
+		}),
+	);
+}
 changes.push(
 	diff(
 		'package.json',
@@ -64,7 +85,10 @@ changes.push(
 			2,
 		),
 		JSON.stringify(
-			{ dependencies: newPackage.dependencies, devDependencies: newPackage.devDependencies },
+			{
+				dependencies: publicDependencies(newPackage.dependencies),
+				devDependencies: publicDependencies(newPackage.devDependencies),
+			},
 			null,
 			2,
 		),
@@ -86,7 +110,7 @@ const previousGuide = execFileSync(
 if (!previousGuide) throw new Error('Previous upgrade history is missing.');
 
 const introduction = `---
-{ "kind": "channel", "version": 3, "website": "https://developers.cloudflare.com/email-service/" }
+{ "kind": "channel", "version": 4, "website": "https://developers.cloudflare.com/email-service/" }
 ---
 
 # Cloudflare Email Service and threaded HITL
@@ -112,9 +136,11 @@ src/, or the root. Confirm the Cloudflare target and inspect agents, app.ts,
 cloudflare.ts, Wrangler resources, migrations, environment and sender policies.
 Preserve existing Worker handlers and application customizations.
 
-Install direct dependencies postal-mime@^2.6.0, html-to-text@^9.0.5, valibot and
-@earendil-works/pi-ai@^1.1.0 when missing; add @types/html-to-text@^9 as a dev
-dependency. Pi provides the same faux
+Install @illuwa-soft/flue-cloudflare-email@^0.1.0 and compatible published
+@flue/runtime. Install postal-mime and valibot for the optional application
+history/HITL example, and @earendil-works/pi-ai for its local faux model.
+The reusable email implementation lives only in the npm package; do not copy a
+channels/email.ts implementation into the consumer. Pi provides the same faux
 provider mechanism already used by Flue's offline examples. Keep the installed
 Flue/Vite toolchain. Add EMAIL_MODE: "live" to Wrangler vars, plus INBOX (R2),
 EMAIL (send_email), EMAIL_RECIPIENT and EMAIL_REPLY_ALLOWED_SENDERS. An empty
@@ -122,7 +148,8 @@ allowlist disables replies. Generate package-local Worker Env types with
 wrangler types; do not hand-author Env or generated FLUE_* bindings.
 
 The complete generated modules below are relative to the selected source root.
-Only channels/email.ts carries the blueprint version marker. Merge the default
+This package-backed guide has no generated primary-file marker; compare the
+dependency version and application wiring during updates. Merge the default
 email handler with existing non-HTTP handlers; keep HTTP composition in app.ts.
 The dispatch-only agent needs no HTTP mount. If HTTP conversation/state routes
 are exposed, authenticate them: email ids and thread ids are not capabilities.
@@ -197,7 +224,8 @@ Test actual domain routing and mailbox delivery separately when authorized.
 
 Inspect an unmarked implementation and compare it with the complete current
 guide. Preserve sender policy, existing handlers, resource identities and
-migrations. Mark only channels/email.ts after convergence. Initial creation
+migrations. Update the dependency instead of maintaining a copied email
+adapter; remove the old source copy after its callers use the package. Initial creation
 data changes from emailId to threadId/owner: old v1 per-mail conversations are
 not resumed as v2 tasks. New ingress uses the cloudflare-thread: prefix; do not
 replay old mail or migrate an uncertain operation into an approved state.
@@ -220,13 +248,13 @@ merge those additions into the consumer's actual manifests.
 
 ${previousGuide.trim()}
 
-### Version 3 — 2026-10-16
+### Version 4 — 2026-10-17
 
-General conversation and in-thread memory, HTML-only body conversion with
-quoted-command preservation, explicit legacy reference/history import, and
-approval only for requested document actions. Add html-to-text and its types;
-install the history helper and keep the operator migration private. The full
-v2-to-v3 source/configuration delta follows.
+Use the independently released community package as the sole email
+implementation. Remove the copied adapter, import the public package in
+application-owned code and keep HITL/history policy in the application. Consumers
+can use published Flue without this fork. The full v3-to-v4 source/configuration
+delta follows.
 
 \`\`\`diff
 ${changes.join('\n')}
@@ -238,5 +266,5 @@ await writeFile(
 	introduction + modules + ending,
 );
 console.log(
-	'Regenerated Cloudflare Email Blueprint v3 from the executable example and frozen v2 baseline.',
+	'Regenerated package-backed Cloudflare Email Blueprint v4 from the executable example and frozen v3 baseline.',
 );

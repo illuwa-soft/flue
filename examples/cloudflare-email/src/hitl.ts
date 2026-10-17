@@ -1,4 +1,4 @@
-import { replyToEmail, retrieveThreadEmail } from './channels/email.ts';
+import { replyToEmail, retrieveThreadEmail } from '@illuwa-soft/flue-cloudflare-email';
 
 export type Plan = { title: string; content: string };
 type Approval = { id: string; toolCallId: string; token: string; plan: Plan; expiresAt: number };

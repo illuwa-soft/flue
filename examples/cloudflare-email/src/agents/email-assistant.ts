@@ -9,8 +9,8 @@ import {
 	useModel,
 	useTool,
 } from '@flue/runtime';
+import { replyToEmail, retrieveThreadEmail } from '@illuwa-soft/flue-cloudflare-email';
 import * as v from 'valibot';
-import { replyToEmail, retrieveThreadEmail } from '../channels/email.ts';
 import { readThreadHistory } from '../history.ts';
 import { handleHumanReply, proposeApproval, readHitlState } from '../hitl.ts';
 import { installLocalModel } from '../local-model.ts';

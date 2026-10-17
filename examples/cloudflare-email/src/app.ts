@@ -1,9 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { createAgentRouter } from '@flue/runtime/routing';
+import { retrieveEmail } from '@illuwa-soft/flue-cloudflare-email';
 import { Hono } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { EmailAssistant } from './agents/email-assistant.ts';
-import { retrieveEmail } from './channels/email.ts';
 import { importLegacyThread } from './history.ts';
 import { readHitlState } from './hitl.ts';
 

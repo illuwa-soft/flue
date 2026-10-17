@@ -1,5 +1,5 @@
+import { indexThreadMessage, readableEmailText } from '@illuwa-soft/flue-cloudflare-email';
 import PostalMime from 'postal-mime';
-import { indexThreadMessage, readableEmailText } from './channels/email.ts';
 
 type PriorMail = { emailId: string; subject: string; text: string; receivedAt: string };
 type History = { owner: string; emailIds: string[]; messages: PriorMail[] };

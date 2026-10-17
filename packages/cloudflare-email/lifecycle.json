@@ -1,0 +1,19 @@
+{
+	"status": "active",
+	"repository": "illuwa-soft/flue",
+	"branch": "community",
+	"maintainer": "yontani",
+	"reviewedAt": "2026-10-17",
+	"reviewAfterDays": 30,
+	"upstream": {
+		"repository": "withastro/flue",
+		"discussion": 864,
+		"pullRequest": null,
+		"blueprint": "blueprints/channel--cloudflare-email.md",
+		"acknowledgedReplyId": null,
+		"acknowledgedBlueprintSha": null,
+		"acknowledgedMergeSha": null,
+		"acknowledgedDiscussionState": null
+	},
+	"successor": null
+}

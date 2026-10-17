@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { receiveEmail, replyToEmail, retrieveEmail } from '../src/channels/email.ts';
+import { receiveEmail, replyToEmail, retrieveEmail } from '@illuwa-soft/flue-cloudflare-email';
 import { importLegacyThread, readThreadHistory } from '../src/history.ts';
 import { handleHumanReply, parseDecision, proposeApproval, readHitlState } from '../src/hitl.ts';
 

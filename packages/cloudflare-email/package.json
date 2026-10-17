@@ -1,0 +1,65 @@
+{
+	"name": "@illuwa-soft/flue-cloudflare-email",
+	"version": "0.1.0",
+	"description": "Native Cloudflare email ingress, threaded Flue conversations, and bounded replies.",
+	"type": "module",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/illuwa-soft/flue.git",
+		"directory": "packages/cloudflare-email"
+	},
+	"homepage": "https://github.com/illuwa-soft/flue/tree/community/packages/cloudflare-email#readme",
+	"bugs": {
+		"url": "https://github.com/illuwa-soft/flue/issues"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/channel.d.mts",
+			"import": "./dist/channel.mjs"
+		}
+	},
+	"main": "./dist/channel.mjs",
+	"types": "./dist/channel.d.mts",
+	"files": [
+		"dist",
+		"README.md",
+		"API.md",
+		"MAINTAINING.md",
+		"MIGRATING.md",
+		"CHANGELOG.md",
+		"LICENSE",
+		"NOTICE"
+	],
+	"sideEffects": false,
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"publishConfig": {
+		"access": "public",
+		"registry": "https://registry.npmjs.org"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"check:types": "tsc --noEmit",
+		"test": "node --test test/*.test.mjs",
+		"test:consumer": "node scripts/consumer.mjs",
+		"release:check": "node scripts/lifecycle.mjs release-check",
+		"maintenance": "node scripts/lifecycle.mjs status",
+		"retirement:check": "node scripts/lifecycle.mjs retirement-check"
+	},
+	"peerDependencies": {
+		"@flue/runtime": "^2.3.0"
+	},
+	"dependencies": {
+		"html-to-text": "^9.0.5",
+		"postal-mime": "^2.6.0"
+	},
+	"devDependencies": {
+		"@flue/runtime": "workspace:*",
+		"@types/html-to-text": "^9.0.4",
+		"@types/node": "^26.1.1",
+		"tsdown": "^0.22.7",
+		"typescript": "^7.0.2"
+	}
+}

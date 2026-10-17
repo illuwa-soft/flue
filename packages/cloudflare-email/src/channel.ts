@@ -1,10 +1,81 @@
-// flue-blueprint: channel/cloudflare-email@3
+// Community package extracted from the application prototype; storage keys remain compatible.
 import type { AgentDispatchRequest, DispatchReceipt } from '@flue/runtime';
 import { convert } from 'html-to-text';
 import PostalMime from 'postal-mime';
 
 const MAX_EMAIL_BYTES = 1024 * 1024;
 const MAX_CONTEXT_CHARACTERS = 16_000;
+
+/** Minimal native ingress surface; no consumer-generated Env is part of this package. */
+export type IncomingEmail = {
+	readonly from: string;
+	readonly to: string;
+	readonly headers: { get(name: string): string | null };
+	readonly raw: ReadableStream<Uint8Array>;
+	readonly rawSize: number;
+	setReject(reason: string): void;
+};
+
+export type OutgoingEmail = {
+	from: string;
+	to: string;
+	subject: string;
+	text: string;
+	headers: Record<string, string>;
+};
+
+/** The get/put subset used by the adapter; a native R2Bucket satisfies this contract. */
+export type EmailStore = {
+	get(key: string): Promise<{
+		customMetadata?: Record<string, string>;
+		arrayBuffer(): Promise<ArrayBuffer>;
+		json<T>(): Promise<T>;
+	} | null>;
+	put(
+		key: string,
+		value: string | ArrayBuffer,
+		options?: {
+			onlyIf?: { etagDoesNotMatch: string };
+			customMetadata?: Record<string, string>;
+			httpMetadata?: { contentType: string };
+		},
+	): Promise<{ etag: string } | null>;
+};
+
+export type EmailBindings = {
+	INBOX: EmailStore;
+	EMAIL: { send(message: OutgoingEmail): Promise<{ messageId: string }> };
+	EMAIL_RECIPIENT: string;
+	EMAIL_REPLY_ALLOWED_SENDERS: string;
+	EMAIL_MODE?: 'live' | 'local';
+};
+
+export type AdmitEmail = (request: AgentDispatchRequest) => Promise<DispatchReceipt>;
+
+/** Compose a native email handler from explicit bindings and application-owned admission. / 명시적 바인딩과 앱 소유 접수 함수로 네이티브 이메일 핸들러를 구성합니다. */
+export function createCloudflareEmailChannel(options: {
+	bindings: EmailBindings;
+	admit: AdmitEmail;
+}) {
+	return {
+		/** A Worker email handler; admission completes before returning. / 반환 전에 영속 접수를 마치는 Worker 이메일 핸들러입니다. */
+		async email(message: IncomingEmail): Promise<void> {
+			await receiveEmail(message, options.bindings, options.admit);
+		},
+		/** Receive with an application-visible admission receipt. / 앱에서 확인 가능한 접수 결과와 함께 수신합니다. */
+		receive(message: IncomingEmail) {
+			return receiveEmail(message, options.bindings, options.admit);
+		},
+		/** Retrieve a bounded message. / 제한된 본문을 조회합니다. */
+		retrieve(emailId: string) {
+			return retrieveEmail(options.bindings, emailId);
+		},
+		/** Send a scoped reply. / 연결된 작성자에게 답장합니다. */
+		reply(emailId: string, text: string) {
+			return replyToEmail(options.bindings, emailId, text);
+		},
+	};
+}
 
 /** Hash envelope-scoped identities without putting email addresses in object keys. / 주소가 객체 키에 드러나지 않도록 봉투 범위 식별자를 해시합니다. */
 async function digest(value: string | ArrayBuffer): Promise<string> {
@@ -30,7 +101,7 @@ function messageIds(value: string): string[] {
 
 /** Index both incoming and sent Message-IDs under the receiving mailbox. / 수신함 범위에서 수신·발신 Message-ID를 모두 인덱싱합니다. */
 export async function indexThreadMessage(
-	env: Env,
+	env: EmailBindings,
 	messageId: string,
 	threadId: string,
 	owner: string,
@@ -47,7 +118,12 @@ export async function indexThreadMessage(
 }
 
 /** Resolve a known thread only for its original participant. / 원래 참여자에게만 기존 스레드를 연결합니다. */
-async function resolveThread(env: Env, headers: Headers, emailId: string, owner: string) {
+async function resolveThread(
+	env: EmailBindings,
+	headers: IncomingEmail['headers'],
+	emailId: string,
+	owner: string,
+) {
 	const candidates = messageIds(
 		[
 			headers.get('in-reply-to') ?? '',
@@ -70,8 +146,8 @@ async function resolveThread(env: Env, headers: Headers, emailId: string, owner:
 
 /** Persist original bytes before durable admission; retry the same delivery with the same key. / 원문 저장 후 영속 접수하며 재전달에는 동일 키를 사용합니다. */
 export async function receiveEmail(
-	message: ForwardableEmailMessage,
-	env: Env,
+	message: IncomingEmail,
+	env: EmailBindings,
 	admit: (request: AgentDispatchRequest) => Promise<DispatchReceipt>,
 ) {
 	if (message.to !== env.EMAIL_RECIPIENT) {
@@ -155,7 +231,7 @@ export function readableEmailText(email: { text?: string; html?: string }) {
 }
 
 /** Load only the email bound to this instance; attachments remain metadata-only. / 인스턴스에 연결된 메일만 읽고 첨부파일은 메타데이터만 제공합니다. */
-export async function retrieveEmail(env: Env, emailId: string) {
+export async function retrieveEmail(env: EmailBindings, emailId: string) {
 	const stored = await env.INBOX.get(emailKey(emailId));
 	if (!stored) throw new Error('Inbound email not found.');
 
@@ -182,7 +258,7 @@ export async function retrieveEmail(env: Env, emailId: string) {
 
 /** Require the current delivery to belong to this thread and participant. / 현재 전달된 메일이 이 스레드와 참여자에게 속하는지 확인합니다. */
 export async function retrieveThreadEmail(
-	env: Env,
+	env: EmailBindings,
 	threadId: string,
 	owner: string,
 	emailId: string,
@@ -195,7 +271,7 @@ export async function retrieveThreadEmail(
 
 /** Local mode records a simulated outbox; live mode uses the native binding. / 로컬 모드는 가상 발신함에 기록하고 실환경은 네이티브 바인딩을 사용합니다. */
 async function sendMail(
-	env: Env,
+	env: EmailBindings,
 	mail: {
 		from: string;
 		to: string;
@@ -214,7 +290,7 @@ async function sendMail(
 }
 
 /** Reserve a reply before sending; an uncertain outcome requires operator reconciliation. / 발송 전 답장을 선점하고 불확실한 결과는 운영자 확인 대상으로 남깁니다. */
-export async function replyToEmail(env: Env, emailId: string, text: string) {
+export async function replyToEmail(env: EmailBindings, emailId: string, text: string) {
 	if (!text.trim() || text.length > MAX_CONTEXT_CHARACTERS) throw new Error('Invalid reply text.');
 
 	const stored = await env.INBOX.get(emailKey(emailId));

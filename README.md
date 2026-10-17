@@ -1,3 +1,21 @@
+# Illuwa community email package
+
+This fork maintains **[@illuwa-soft/flue-cloudflare-email](./packages/cloudflare-email/README.md)**
+independently of upstream review. Use the published package with official Flue;
+you do not need to run a forked framework.
+
+- [Install and use the email package](./packages/cloudflare-email/README.md)
+- [Local conversational/HITL demo](./examples/cloudflare-email/README.md)
+- [Release and recurring maintenance](./packages/cloudflare-email/MAINTAINING.md)
+- [Official-successor migration and removal](./packages/cloudflare-email/MIGRATING.md)
+- [Lifecycle checkpoint](./packages/cloudflare-email/lifecycle.json)
+- [Upstream discussion](https://github.com/withastro/flue/discussions/864)
+
+`community` is the maintained default branch; `main` remains an upstream reference.
+Merge detection requests review, never automatic deletion or deprecation.
+
+---
+
 # Flue — The Agent Harness Framework
 
 Not another SDK. Build autonomous agents with Flue's programmable TypeScript harness.

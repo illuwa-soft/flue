@@ -55,11 +55,10 @@ test(
 				{ env },
 			);
 			assert.equal(add.stdout, update.stdout);
-			assert.ok(add.stdout.includes('flue-blueprint: channel/cloudflare-email@3'));
+			assert.ok(add.stdout.includes('@illuwa-soft/flue-cloudflare-email'));
 			const blocks = [...guide.matchAll(/```ts\n([\s\S]*?)\n```/g)].map((match) => match[1]);
-			assert.equal(blocks.length, 6);
+			assert.equal(blocks.length, 5);
 			const destinations = [
-				'src/channels/email.ts',
 				'src/history.ts',
 				'src/hitl.ts',
 				'src/local-model.ts',
@@ -109,8 +108,8 @@ test(
 			await execute(process.execPath, ['--test', 'test/email.test.mjs'], options);
 			await execute('pnpm', ['exec', 'vite', 'build'], options);
 			const upgrade = path.join(consumer, 'upgrade');
-			const baseline = '0d358e7492cdc7aed79b57a3e751d6c96ef4cfac';
-			for (const destination of [...destinations, 'wrangler.jsonc']) {
+			const baseline = '90f3b6c27eeaef217bd59883e58bdd822d4398f8';
+			for (const destination of [...destinations, 'src/channels/email.ts', 'wrangler.jsonc']) {
 				const result = await execute(
 					'git',
 					['show', `${baseline}:examples/cloudflare-email/${destination}`],
@@ -134,7 +133,7 @@ test(
 			);
 			const upgradeDiff = [...guide.matchAll(/```diff\n([\s\S]*?)\n```/g)].at(-1)?.[1];
 			assert.ok(upgradeDiff);
-			const diffFile = path.join(consumer, 'v3.patch');
+			const diffFile = path.join(consumer, 'v4.patch');
 			await writeFile(diffFile, `${upgradeDiff}\n`);
 			const directory = `--directory=${path.relative(root, upgrade)}`;
 			await execute('git', ['apply', '--check', directory, diffFile], { cwd: root });

@@ -1,0 +1,9 @@
+@illuwa-soft/flue-cloudflare-email
+Copyright 2026 Illuwa contributors.
+
+This community-maintained integration was extracted from the Cloudflare email
+prototype in https://github.com/illuwa-soft/flue. Flue is an Apache-2.0 project
+maintained at https://github.com/withastro/flue.
+
+This package is not an official Flue or Cloudflare package. Referencing those
+projects describes compatibility and does not imply endorsement.

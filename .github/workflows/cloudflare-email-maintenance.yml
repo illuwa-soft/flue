@@ -1,0 +1,34 @@
+name: Community Cloudflare email maintenance
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'illuwa-soft/flue'
+    uses: ./.github/workflows/cloudflare-email-ci.yml
+  report:
+    if: always() && github.repository == 'illuwa-soft/flue'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: node packages/cloudflare-email/scripts/lifecycle.mjs status --write --verification "$CHECK_RESULT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHECK_RESULT: ${{ needs.verify.result }}
