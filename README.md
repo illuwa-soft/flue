@@ -1,22 +1,66 @@
-# Illuwa community email package
+# Illuwa Flue community
 
-This fork maintains **[@illuwa-soft/flue-cloudflare-email](./packages/cloudflare-email/README.md)**
-independently of upstream review. Use the published package with official Flue;
-you do not need to run a forked framework.
+This fork is the home for Illuwa-maintained extensions to
+[Flue](https://github.com/withastro/flue): channels, sandbox adapters, tools,
+and other integrations. The `community` branch brings verified extensions and
+executable examples together. Each package has its own version and release lifecycle.
 
-- [Install and use the email package](./packages/cloudflare-email/README.md)
-- [Local conversational/HITL demo](./examples/cloudflare-email/README.md)
+Extensions can evolve and ship independently of upstream review. Prefer public
+Flue APIs so consumers can use published extensions with official Flue.
+
+## Community extensions
+
+| Extension        | Package                                                                                                  | Usage and examples                                                                                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloudflare email | [`@illuwa-soft/flue-cloudflare-email`](https://www.npmjs.com/package/@illuwa-soft/flue-cloudflare-email) | [Connection guide](./packages/cloudflare-email/README.md), [API reference](./packages/cloudflare-email/API.md), [conversation and HITL example](./examples/cloudflare-email/README.md) |
+
+Add each maintained extension to this list when its implementation and usage
+guide are available. Keep reusable code in `packages/` and consuming examples
+in `examples/`.
+
+## Branch workflow
+
+| Branch                         | Purpose                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------- |
+| `main`                         | Upstream reference and synchronization baseline.                                   |
+| `community`                    | Maintained default branch for verified extensions and package releases.            |
+| `feat/*`, `fix/*`              | Focused work branches based on `community`; merge after verification.              |
+| Upstream contribution branches | Based on upstream `main`, carrying only the changes relevant to that contribution. |
+
+Develop on focused branches and integrate on `community`. Keep extension
+boundaries in packages rather than maintaining a permanent branch per feature.
+Bring upstream updates into `main` and then verify their integration with
+`community`. Follow upstream's contribution policy before submitting changes.
+
+## Package releases and maintenance
+
+Each extension owns its version, changelog, compatibility checks, release lane,
+and upstream-adoption decision. Adding a package requires its own verification
+and publishing configuration; integration on `community` does not publish every
+package together.
+
+When a maintainer pushes a new stable email package version to `community`, the
+[email release workflow](./.github/workflows/cloudflare-email-release.yml) runs
+its checks and publishes through npm Trusted Publishing. The workflow skips
+already-published versions. Additional packages need their own release setup.
+
+Email maintenance references:
+
 - [Release and recurring maintenance](./packages/cloudflare-email/MAINTAINING.md)
 - [Official-successor migration and removal](./packages/cloudflare-email/MIGRATING.md)
 - [Lifecycle checkpoint](./packages/cloudflare-email/lifecycle.json)
 - [Upstream discussion](https://github.com/withastro/flue/discussions/864)
 
-`community` is the maintained default branch; `main` remains an upstream reference.
-Merge detection requests review, never automatic deletion or deprecation.
+An upstream merge starts an adoption review. Retirement requires a released,
+verified successor and a maintainer-reviewed migration. Preserve published
+versions and persisted consumer data during that transition.
 
 ---
 
-# Flue — The Agent Harness Framework
+## Upstream Flue
+
+The following overview introduces the upstream framework. See the
+[official documentation](https://flueframework.com/docs/) for framework usage.
 
 Not another SDK. Build autonomous agents with Flue's programmable TypeScript harness.
 
@@ -49,7 +93,7 @@ intentional, and attempt a fix.
 }
 ```
 
-## The framework for building the next generation of agents.
+### The framework for building the next generation of agents
 
 The first agents were built with raw LLM API calls. This worked for simple chatbots and scripted tasks, but not much else.
 
@@ -57,7 +101,7 @@ Agents like Claude Code and Codex broke the mold. These were _real agents._ Auto
 
 **Flue unlocks this new architecture for agents.** Its built-in TypeScript harness gives any model the context and environment it needs for truly autonomous work: sessions, tools, skills, instructions, filesystem access, and a secure sandbox to run in. Run your agents locally via CLI or deploy them to your hosted runtime of choice.
 
-## Features
+### Features
 
 Build agents that can safely take action, maintain continuity, and connect to the systems where work already happens.
 
@@ -71,7 +115,7 @@ Build agents that can safely take action, maintain continuity, and connect to th
 - **[Observability](https://flueframework.com/docs/guide/observability/)** — Monitor your agents and export telemetry with [OpenTelemetry](https://flueframework.com/docs/ecosystem/tooling/opentelemetry/), [Braintrust](https://flueframework.com/docs/ecosystem/tooling/braintrust/), [Sentry](https://flueframework.com/docs/ecosystem/tooling/sentry/), or your own observer.
 - **[Channels](https://flueframework.com/docs/guide/channels/)** — Receive verified events from Slack, Teams, Discord, GitHub, and more.
 
-## Deploy Anywhere
+### Deploy anywhere
 
 - **[Node.js](https://flueframework.com/docs/ecosystem/deploy/node/)**
 - **[Cloudflare Workers](https://flueframework.com/docs/ecosystem/deploy/cloudflare/)**
@@ -80,7 +124,7 @@ Build agents that can safely take action, maintain continuity, and connect to th
 - **[Daytona](https://flueframework.com/docs/ecosystem/sandboxes/daytona/)**
 - **[Render](https://flueframework.com/docs/ecosystem/deploy/render/)**
 
-## Packages
+### Packages
 
 | Package                                         | Description                                                    |
 | ----------------------------------------------- | -------------------------------------------------------------- |
