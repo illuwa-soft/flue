@@ -127,6 +127,9 @@ To retry after resolving authentication or CI failure, dispatch
 `cloudflare-email-release.yml` on `community`; optional version input asserts the
 checkout version. Inspect registry and workflow state before retrying an
 uncertain publish. Published versions are immutable and must not be republished.
+An accepted npm publish can take several minutes to become publicly visible.
+The workflow polls public metadata for that propagation; it never retries the
+publish write. If visibility times out, inspect registry processing before any retry.
 
 OIDC uses no stored npm write token. Public source and package support provenance.
 The first successful publish must occur within **2 days** of registering the

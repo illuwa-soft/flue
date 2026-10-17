@@ -49,11 +49,50 @@ export async function releaseDecision(
 	return { version: manifest.version, publish: true };
 }
 
+/** Poll only public reads while npm processes an accepted publish; never retry the write. */
+export async function verifyPublishedRelease(
+	manifest,
+	{
+		fetchImpl = fetch,
+		attempts = 60,
+		wait = () => new Promise((resolve) => setTimeout(resolve, 5000)),
+	} = {},
+) {
+	const url = `https://registry.npmjs.org/${encodeURIComponent(manifest.name)}/${encodeURIComponent(manifest.version)}`;
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		const response = await fetchImpl(url, {
+			signal: AbortSignal.timeout(10_000),
+			cache: 'no-store',
+		});
+		if (response.ok) {
+			const metadata = await response.json();
+			assert.equal(metadata.name, manifest.name);
+			assert.equal(metadata.version, manifest.version);
+			assert.match(metadata.dist?.integrity ?? '', /^sha512-/);
+			return {
+				version: metadata.version,
+				integrity: metadata.dist.integrity,
+				attestations: metadata.dist.attestations ?? null,
+			};
+		}
+		if (response.status !== 404 && response.status !== 429 && response.status < 500)
+			throw new Error(`Registry verification failed: HTTP ${response.status}`);
+		if (attempt + 1 < attempts) await wait();
+	}
+	throw new Error(
+		'Accepted publish is not publicly visible yet. Inspect npm processing; do not repeat the publish write.',
+	);
+}
+
 /** Export validated data to GitHub outputs without invoking a publishing write. */
 async function main() {
 	const directory = path.resolve(import.meta.dirname, '..');
 	const manifest = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
 	const lifecycle = JSON.parse(await readFile(path.join(directory, 'lifecycle.json'), 'utf8'));
+	if (process.argv[2] === 'verify') {
+		console.log(JSON.stringify(await verifyPublishedRelease(manifest)));
+		return;
+	}
 	const decision = await releaseDecision(manifest, lifecycle, {
 		requestedVersion: process.env.RELEASE_VERSION,
 	});

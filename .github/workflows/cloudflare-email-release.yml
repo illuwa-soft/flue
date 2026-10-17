@@ -78,6 +78,4 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
       - name: Confirm the public registry version
-        run: npm view "@illuwa-soft/flue-cloudflare-email@$RELEASE_VERSION" version dist.integrity --registry=https://registry.npmjs.org --@illuwa-soft:registry=https://registry.npmjs.org
-        env:
-          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: node packages/cloudflare-email/scripts/release.mjs verify

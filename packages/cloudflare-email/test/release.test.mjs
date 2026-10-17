@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { releaseDecision } from '../scripts/release.mjs';
+import { releaseDecision, verifyPublishedRelease } from '../scripts/release.mjs';
 
 const manifest = {
 	name: '@illuwa-soft/flue-cloudflare-email',
@@ -8,6 +8,33 @@ const manifest = {
 	repository: { url: 'git+https://github.com/illuwa-soft/flue.git' },
 };
 const lifecycle = { status: 'active' };
+
+test('accepted publish waits for public visibility without repeating publication', async () => {
+	let reads = 0;
+	const result = await verifyPublishedRelease(manifest, {
+		attempts: 3,
+		wait: async () => {},
+		fetchImpl: async () => {
+			reads++;
+			if (reads < 3) return new Response(null, { status: 404 });
+			return Response.json({
+				name: manifest.name,
+				version: manifest.version,
+				dist: { integrity: 'sha512-test' },
+			});
+		},
+	});
+	assert.equal(reads, 3);
+	assert.equal(result.version, '0.2.0');
+	await assert.rejects(
+		() =>
+			verifyPublishedRelease(manifest, {
+				attempts: 1,
+				fetchImpl: async () => new Response(null, { status: 404 }),
+			}),
+		/do not repeat/,
+	);
+});
 const registry = (versions, latest) => async () =>
 	Response.json({ versions, 'dist-tags': { latest } });
 
